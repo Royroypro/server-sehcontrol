@@ -50,8 +50,9 @@ app.use((err, req, res, next) => {
 });
 
 const port = process.env.PORT || 8899;
-const server = app.listen(port, () => {
-  console.log(`rustdesk-admin-panel escuchando en http://localhost:${port}`);
+const host = process.env.HOST || '0.0.0.0';
+const server = app.listen(port, host, () => {
+  console.log(`rustdesk-admin-panel escuchando en http://${host}:${port}`);
   membershipSync.startPeriodicSync();
   notifications.startAlertScheduler();
 });

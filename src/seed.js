@@ -23,7 +23,7 @@ const existingAdmin = db.prepare('select 1 from users where email = ?').get(admi
 if (!existingAdmin) {
   db.prepare('insert into users (email, password_hash, role) values (?, ?, ?)')
     .run(adminEmail, hashPassword(adminPassword), 'admin');
-  console.log(`Usuario admin creado: ${adminEmail} / ${adminPassword} (cambia esta contrasena despues de entrar)`);
+  console.log(`Usuario admin creado: ${adminEmail}. Cambia la contrasena despues de entrar.`);
 } else {
   console.log(`El admin ${adminEmail} ya existe, no se crea de nuevo.`);
 }

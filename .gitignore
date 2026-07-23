@@ -4,3 +4,4 @@ rustdesk-data/
 backups/
 .env
 *.log
+dist/
