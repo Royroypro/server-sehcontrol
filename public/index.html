@@ -7,7 +7,7 @@
   <meta name="description" content="Plataforma Sehcontrol para acceso remoto seguro y administracion de equipos.">
   <link rel="stylesheet" href="/site.css">
 </head>
-<body>
+<body class="home">
   <header class="site-header">
     <a class="brand" href="/">Sehcontrol</a>
     <nav aria-label="Navegacion principal">
@@ -19,58 +19,69 @@
 
   <main>
     <section class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">CONTROL REMOTO</p>
-        <h1>Sehcontrol</h1>
-        <p class="lead">Accede a tus equipos autorizados y administra tu membresia desde una plataforma centralizada.</p>
-        <p class="account-note">El inicio de sesion es para clientes que ya tienen una cuenta activa.</p>
-        <div class="actions">
-          <a class="button" href="/login.html">Entrar a mi cuenta</a>
-          <a class="button secondary download-client" href="/api/public/client-download" hidden>Descargar Sehcontrol</a>
-          <a class="text-link whatsapp-link" href="#" hidden>Solicitar una cuenta por WhatsApp</a>
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow">ACCESO REMOTO ADMINISTRADO</p>
+          <h1>Sehcontrol</h1>
+          <p class="lead">Tus equipos disponibles cuando los necesitas, con acceso centralizado y una membresia que puedes consultar en todo momento.</p>
+          <div class="actions">
+            <a class="button" href="/login.html">Entrar a mi cuenta</a>
+            <a class="button outline download-client" href="/api/public/client-download" hidden>Descargar para Windows</a>
+          </div>
+          <p class="account-note">El acceso es exclusivo para clientes con una cuenta activa.</p>
+        </div>
+        <div class="hero-status" aria-label="Estado del servicio">
+          <span class="status-dot"></span>
+          <span>Infraestructura operativa</span>
         </div>
       </div>
-      <div class="status-panel" aria-label="Servicios disponibles">
-        <span class="status-dot"></span>
-        <div>
-          <strong>Servicio disponible</strong>
-          <p>Panel, servidor ID y relay integrados.</p>
-        </div>
+    </section>
+
+    <section class="trust-strip" aria-label="Capacidades de Sehcontrol">
+      <p><strong>Una sola cuenta</strong><span>para tus equipos autorizados</span></p>
+      <p><strong>Servidor propio</strong><span>ID y relay integrados</span></p>
+      <p><strong>Planes claros</strong><span>vigencia y limites visibles</span></p>
+      <p><strong>Atencion directa</strong><span>acompanamiento por WhatsApp</span></p>
+    </section>
+
+    <section class="workflow-section">
+      <div class="workflow-heading">
+        <p class="eyebrow">COMO FUNCIONA</p>
+        <h2>Acceso remoto sin vueltas</h2>
+        <p>Sehcontrol reune el cliente de escritorio, la cuenta y la administracion de equipos en un recorrido sencillo.</p>
       </div>
+      <ol class="workflow-list">
+        <li><span>01</span><div><h3>Activa tu cuenta</h3><p>Elige una membresia y coordina la activacion directamente con nuestro equipo.</p></div></li>
+        <li><span>02</span><div><h3>Instala Sehcontrol</h3><p>Descarga el cliente para Windows e inicia sesion con tus credenciales.</p></div></li>
+        <li><span>03</span><div><h3>Conecta tus equipos</h3><p>Administra los dispositivos autorizados y revisa el estado de tu plan desde un solo lugar.</p></div></li>
+      </ol>
     </section>
 
     <section class="plans-section" id="planes">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">MEMBRESIAS</p>
-          <h2>Elige un plan</h2>
+          <p class="eyebrow">MEMBRESIAS DISPONIBLES</p>
+          <h2>El plan adecuado para cada operacion</h2>
         </div>
-        <p>Si todavia no tienes una cuenta, solicita el plan por WhatsApp. Nuestro equipo creara tu acceso despues de coordinar la activacion.</p>
+        <p>Selecciona una opcion y conversa con nosotros. Confirmamos contigo los detalles antes de crear la cuenta.</p>
       </div>
       <div class="plans-grid" id="publicPlans">
         <p class="plans-loading">Cargando planes disponibles...</p>
       </div>
       <div class="sales-contact" id="salesContact" hidden>
-        <span>Atencion para nuevos clientes</span>
+        <span>¿Necesitas una cantidad de equipos o vigencia diferente?</span>
         <a class="whatsapp-link" href="#" target="_blank" rel="noopener"></a>
       </div>
     </section>
 
-    <section class="feature-band">
+    <section class="contact-band">
       <div>
-        <span>01</span>
-        <h2>Equipos</h2>
-        <p>Consulta y organiza los dispositivos vinculados a tu cuenta.</p>
+        <p class="eyebrow">NUEVOS CLIENTES</p>
+        <h2>Cuentanos cuantos equipos necesitas conectar.</h2>
       </div>
-      <div>
-        <span>02</span>
-        <h2>Membresia</h2>
-        <p>Revisa el estado y la vigencia de tu plan de servicio.</p>
-      </div>
-      <div>
-        <span>03</span>
-        <h2>Soporte</h2>
-        <p>Encuentra respuestas para configurar y utilizar el cliente.</p>
+      <div class="contact-actions">
+        <a class="button whatsapp-link" href="#" target="_blank" rel="noopener" hidden>Conversar por WhatsApp</a>
+        <a class="text-link" href="/mas-informacion">Conocer mas sobre Sehcontrol</a>
       </div>
     </section>
   </main>
@@ -132,14 +143,15 @@
           const url = whatsappUrl(number, plan);
           return `
             <article class="plan-item">
-              <div>
+              <div class="plan-main">
                 <p class="plan-name">${escapeHtml(plan.name)}</p>
-                <p class="plan-price">${escapeHtml(formatPlanPrice(plan))}</p>
-                <p class="plan-detail">Hasta ${plan.max_devices} equipo${plan.max_devices === 1 ? '' : 's'} | ${plan.duration_days} dias</p>
                 ${plan.description ? `<p class="plan-description">${escapeHtml(plan.description)}</p>` : ''}
               </div>
+              <div class="plan-capacity"><strong>${plan.max_devices}</strong><span>equipo${plan.max_devices === 1 ? '' : 's'}</span></div>
+              <div class="plan-term"><strong>${plan.duration_days}</strong><span>dias</span></div>
+              <div class="plan-cost"><p class="plan-price">${escapeHtml(formatPlanPrice(plan))}</p><span>por periodo</span></div>
               ${url
-                ? `<a class="button whatsapp-button" href="${url}" target="_blank" rel="noopener">Solicitar por WhatsApp</a>`
+                ? `<a class="button whatsapp-button" href="${url}" target="_blank" rel="noopener">Solicitar plan</a>`
                 : '<span class="contact-unavailable">Contacto no configurado</span>'}
             </article>`;
         }).join('');
