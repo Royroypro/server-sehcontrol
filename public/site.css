@@ -169,6 +169,13 @@ h1, h2, p { letter-spacing: 0; }
 .plan-name { margin: 0; font-size: 19px; font-weight: 700; }
 .plan-price { margin: 4px 0 0; color: var(--blue); font-size: 24px; font-weight: 750; }
 .plan-detail, .plans-loading, .contact-unavailable { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+.plan-description {
+  max-width: 680px;
+  margin: 14px 0 0;
+  color: var(--ink);
+  font-size: 14px;
+  white-space: pre-line;
+}
 .whatsapp-button { min-width: 190px; background: var(--green); border-color: var(--green); }
 .whatsapp-button:hover { background: #0f6947; }
 

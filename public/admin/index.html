@@ -146,6 +146,8 @@ function openPlanModal(plan) {
     <form class="card modal">
       <h2>${isEdit ? 'Editar plan' : 'Nuevo plan'}</h2>
       <label>Nombre</label><input name="name" required value="${isEdit ? plan.name : ''}">
+      <label>Descripcion / beneficios del plan</label>
+      <textarea name="description" rows="4" placeholder="Describe lo que incluye este plan"></textarea>
       <label>Limite de equipos</label><input name="max_devices" type="number" min="1" required value="${isEdit ? plan.max_devices : 1}">
       <label>Precio</label>
       <div style="display:flex;gap:8px;">
@@ -166,11 +168,13 @@ function openPlanModal(plan) {
       </div>
     </form>`;
   document.body.appendChild(div);
+  if (isEdit) div.querySelector('[name="description"]').value = plan.description || '';
   div.querySelector('form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     const payload = {
       name: f.name.value,
+      description: f.description.value,
       max_devices: Number(f.max_devices.value),
       price_cents: Math.round(Number(f.price.value) * 100),
       currency: f.currency.value,

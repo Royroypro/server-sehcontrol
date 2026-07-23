@@ -13,6 +13,7 @@ db.exec(`
   create table if not exists plans (
     id integer primary key autoincrement,
     name varchar(100) not null unique,
+    description text,
     max_devices integer not null default 1,
     price_cents integer not null default 0,
     currency varchar(10) not null default 'USD',
@@ -149,6 +150,7 @@ function addColumnIfMissing(table, column, definition) {
   return false;
 }
 addColumnIfMissing('plans', 'currency', "varchar(10) not null default 'USD'");
+addColumnIfMissing('plans', 'description', 'text');
 const addedPlanVisibility = addColumnIfMissing('plans', 'is_public', 'tinyint not null default 0');
 if (addedPlanVisibility) {
   db.prepare("update plans set is_public = 1 where name in ('Free', 'Pro', 'Enterprise')").run();

@@ -90,14 +90,14 @@ router.get('/plans', (req, res) => {
 });
 
 router.post('/plans', (req, res) => {
-  const { name, max_devices, price_cents, currency, duration_days, is_public } = req.body || {};
+  const { name, description, max_devices, price_cents, currency, duration_days, is_public } = req.body || {};
   if (!name || max_devices == null) {
     return res.status(400).json({ error: 'name y max_devices son requeridos' });
   }
   try {
     const info = db.prepare(
-      'insert into plans (name, max_devices, price_cents, currency, duration_days, is_public) values (?, ?, ?, ?, ?, ?)'
-    ).run(name, Number(max_devices), Number(price_cents) || 0, currency || 'USD', Number(duration_days) || 30, is_public ? 1 : 0);
+      'insert into plans (name, description, max_devices, price_cents, currency, duration_days, is_public) values (?, ?, ?, ?, ?, ?, ?)'
+    ).run(name, description != null ? (String(description).trim() || null) : null, Number(max_devices), Number(price_cents) || 0, currency || 'USD', Number(duration_days) || 30, is_public ? 1 : 0);
     notifications.logActivity(req.user.sub, 'plan_created', 'plan', info.lastInsertRowid, name);
     res.status(201).json(db.prepare('select * from plans where id = ?').get(info.lastInsertRowid));
   } catch (e) {
@@ -108,11 +108,12 @@ router.post('/plans', (req, res) => {
 router.put('/plans/:id', (req, res) => {
   const plan = db.prepare('select * from plans where id = ?').get(req.params.id);
   if (!plan) return res.status(404).json({ error: 'Plan no encontrado' });
-  const { name, max_devices, price_cents, currency, duration_days, is_public } = req.body || {};
+  const { name, description, max_devices, price_cents, currency, duration_days, is_public } = req.body || {};
   db.prepare(
-    'update plans set name = ?, max_devices = ?, price_cents = ?, currency = ?, duration_days = ?, is_public = ? where id = ?'
+    'update plans set name = ?, description = ?, max_devices = ?, price_cents = ?, currency = ?, duration_days = ?, is_public = ? where id = ?'
   ).run(
     name ?? plan.name,
+    description !== undefined ? (String(description).trim() || null) : plan.description,
     max_devices != null ? Number(max_devices) : plan.max_devices,
     price_cents != null ? Number(price_cents) : plan.price_cents,
     currency || plan.currency,

@@ -9,7 +9,7 @@ router.get('/plans', (req, res) => {
     from platform_settings where id = 1
   `).get();
   const plans = db.prepare(`
-    select id, name, max_devices, price_cents, currency, duration_days
+    select id, name, description, max_devices, price_cents, currency, duration_days
     from plans where is_public = 1
     order by price_cents asc, id asc
   `).all();

@@ -135,6 +135,7 @@
                 <p class="plan-name">${escapeHtml(plan.name)}</p>
                 <p class="plan-price">${escapeHtml(formatPlanPrice(plan))}</p>
                 <p class="plan-detail">Hasta ${plan.max_devices} equipo${plan.max_devices === 1 ? '' : 's'} | ${plan.duration_days} dias</p>
+                ${plan.description ? `<p class="plan-description">${escapeHtml(plan.description)}</p>` : ''}
               </div>
               ${url
                 ? `<a class="button whatsapp-button" href="${url}" target="_blank" rel="noopener">Solicitar por WhatsApp</a>`
