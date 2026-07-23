@@ -15,6 +15,21 @@ function readPublicKey() {
   return publicKey;
 }
 
+function getPublicKeyInfo() {
+  const publicKey = readPublicKey();
+  if (!publicKey) return null;
+
+  return {
+    algorithm: 'Ed25519',
+    public_key: publicKey,
+    fingerprint_sha256: crypto
+      .createHash('sha256')
+      .update(Buffer.from(publicKey, 'base64'))
+      .digest('hex'),
+    updated_at: fs.statSync(publicKeyPath).mtime.toISOString(),
+  };
+}
+
 function generateRustdeskKeyPair() {
   // RustDesk evita "/" en la key publica para que sea facil usarla en URLs
   // y configuraciones. La probabilidad de necesitar muchos intentos es baja.
@@ -67,4 +82,9 @@ function rotateKeyPair() {
   return pair.publicKey;
 }
 
-module.exports = { readPublicKey, rotateKeyPair, generateRustdeskKeyPair };
+module.exports = {
+  readPublicKey,
+  getPublicKeyInfo,
+  rotateKeyPair,
+  generateRustdeskKeyPair,
+};

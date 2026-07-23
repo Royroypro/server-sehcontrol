@@ -8,6 +8,7 @@ const { buildReceiptPdf } = require('../receipt');
 const { formatCurrency } = require('../format');
 const { requireAuth, requireAdmin, hashPassword } = require('../auth');
 const rustdeskKey = require('../rustdeskKey');
+const { pushToAll } = require('../ws');
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -41,7 +42,7 @@ router.put('/settings', (req, res) => {
 
 router.get('/settings/rustdesk-key', (req, res) => {
   try {
-    res.json({ public_key: rustdeskKey.readPublicKey() });
+    res.json(rustdeskKey.getPublicKeyInfo());
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -52,9 +53,11 @@ router.post('/settings/rustdesk-key/rotate', (req, res) => {
     return res.status(400).json({ error: 'Debes confirmar la rotacion de la key' });
   }
   try {
-    const publicKey = rustdeskKey.rotateKeyPair();
+    rustdeskKey.rotateKeyPair();
+    const serverKey = rustdeskKey.getPublicKeyInfo();
+    const notifiedClients = pushToAll({ type: 'server_key_changed', data: serverKey });
     notifications.logActivity(req.user.sub, 'rustdesk_key_rotated', 'platform_settings', 1, 'Key publica de RustDesk rotada');
-    res.json({ public_key: publicKey, restarting: true });
+    res.json({ ...serverKey, restarting: true, notified_clients: notifiedClients });
   } catch (e) {
     res.status(500).json({ error: `No se pudo rotar la key: ${e.message}` });
   }

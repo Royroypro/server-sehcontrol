@@ -6,6 +6,7 @@ const db = require('../db/adminDb');
 const { requireBearerAuth } = require('../auth');
 const { isUserBlocked } = require('../membershipSync');
 const { formatCurrency } = require('../format');
+const rustdeskKey = require('../rustdeskKey');
 
 const router = express.Router();
 
@@ -13,9 +14,14 @@ const router = express.Router();
 // decidir si se debe forzar el modal de login antes de mostrar la ventana
 // principal. Toggle operativo via .env, sin tocar codigo.
 router.get('/client-policy', (req, res) => {
-  res.json({
-    force_login: (process.env.FORCE_LOGIN || 'true') === 'true',
-  });
+  try {
+    res.set('Cache-Control', 'no-store').json({
+      force_login: (process.env.FORCE_LOGIN || 'true') === 'true',
+      server_key: rustdeskKey.getPublicKeyInfo(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: `No se pudo leer la key del servidor: ${e.message}` });
+  }
 });
 
 // Pensado para sondeo periodico (polling) desde el cliente ya logueado, para

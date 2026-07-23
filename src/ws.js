@@ -5,6 +5,7 @@
 // websocket se cae, reconecta) pero ya no es la unica via.
 const { WebSocketServer } = require('ws');
 const jwt = require('jsonwebtoken');
+const rustdeskKey = require('./rustdeskKey');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -61,7 +62,13 @@ function initWebSocketServer(httpServer) {
     }
 
     addConnection(userId, ws);
-    send(ws, { type: 'connected' });
+    let serverKey = null;
+    try {
+      serverKey = rustdeskKey.getPublicKeyInfo();
+    } catch (_) {
+      // La conexion sigue siendo util aunque la key aun no este disponible.
+    }
+    send(ws, { type: 'connected', server_key: serverKey });
 
     ws.on('close', () => removeConnection(userId, ws));
     ws.on('error', () => removeConnection(userId, ws));

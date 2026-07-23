@@ -62,11 +62,33 @@ debe empezar a usar.
 saber si el usuario está logueado.
 
 ```json
-{ "force_login": true }
+{
+  "force_login": true,
+  "server_key": {
+    "algorithm": "Ed25519",
+    "public_key": "yWgYPUl5u5oWdp2CpxBIyTm1MS8s++A4icIWDbpnJlo=",
+    "fingerprint_sha256": "<sha256-hex>",
+    "updated_at": "2026-07-23T00:00:00.000Z"
+  }
+}
 ```
 
 Si `force_login` es `true` y el usuario no tiene sesión activa, la app debe mostrar el modal
 de login de forma bloqueante antes de dejar usar cualquier otra función.
+
+**`GET /api/public/server-key`** — sin autenticación. Devuelve solamente `server_key` con
+el mismo formato, para que el cliente pueda volver a consultarla sin descargar toda la
+política.
+
+> Mensaje para el desarrollador del cliente: la primera clave debe venir incluida en la
+> aplicación o descargarse mediante HTTPS con certificado validado. No reemplaces
+> silenciosamente una clave guardada usando una respuesta HTTP no autenticada, porque un
+> atacante podría sustituir tanto el servidor como la clave. En una LAN confiable se puede
+> permitir el alta inicial por HTTP con confirmación visible del usuario. Guarda
+> `public_key` en la opción RustDesk `key`; usa `fingerprint_sha256` para detectar cambios.
+> Cuando llegue `server_key_changed`, vuelve a consultar `/api/public/server-key`, valida
+> la confianza y aplica la clave antes de reconectar. El cliente oficial de RustDesk no
+> consume este endpoint: esta lógica debe agregarse al cliente personalizado.
 
 **`GET /api/membership/status`** — requiere `Authorization: Bearer <access_token>`. Pensado
 para sondeo periódico (polling) mientras la app está abierta.
@@ -314,7 +336,11 @@ void connectRealtimeChannel() async {
 void _handleRealtimeEvent(Map<String, dynamic> event) {
   switch (event['type']) {
     case 'connected':
-      break; // ack de conexion, no hace falta hacer nada
+      inspectAndApplyServerKey(event['server_key']);
+      break;
+    case 'server_key_changed':
+      refetchValidateAndApplyServerKey();
+      break;
     case 'membership_status':
       final d = event['data'];
       membershipBlocked.value = d['blocked'] == true;
@@ -336,7 +362,10 @@ Cerrar el canal (`_wsChannel?.sink.close()`) en `logOut()`.
 `src/ws.js` del repo `rustdesk-admin-panel`):
 
 ```json
-{ "type": "connected" }
+{ "type": "connected", "server_key": { "algorithm": "Ed25519", "public_key": "...", "fingerprint_sha256": "...", "updated_at": "..." } }
+```
+```json
+{ "type": "server_key_changed", "data": { "algorithm": "Ed25519", "public_key": "...", "fingerprint_sha256": "...", "updated_at": "..." } }
 ```
 ```json
 { "type": "membership_status", "data": { "blocked": true, "reason": "suspended", "message": "Tu cuenta esta suspendida. Contacta al administrador." } }
@@ -355,6 +384,7 @@ conexiones inactivas — el servidor responde `{"type":"pong"}`.
 
 ```
 GET  {api_server}/api/client-policy          (sin auth)
+GET  {api_server}/api/public/server-key      (sin auth)
 GET  {api_server}/api/membership/status      (Authorization: Bearer <token>)
 GET  {api_server}/api/messages               (Authorization: Bearer <token>)
 GET  {api_server}/api/messages?unread=1      (Authorization: Bearer <token>)
@@ -391,6 +421,8 @@ conectarse, en vez de encontrarse un error genérico de conexión fallida.
 
 - [ ] `GET /api/client-policy` al arranque, antes de `runApp()` (o inmediatamente después si
       `dialogManager` lo requiere).
+- [ ] Validar y guardar `server_key.public_key` como opción RustDesk `key`; fijar la primera
+      clave mediante HTTPS, clave incluida en la app o confirmación explícita del usuario.
 - [ ] Forzar `loginDialog()` en loop hasta login exitoso si `force_login == true` y no hay sesión.
 - [ ] Si no hay `api_server` configurado, no forzar nada (comportamiento actual sin cambios).
 - [ ] `UserModel.startMembershipPolling()` tras login exitoso y tras `refreshCurrentUser()` exitoso.
@@ -404,6 +436,7 @@ conectarse, en vez de encontrarse un error genérico de conexión fallida.
       guardada, con reconexion automatica si se cae.
 - [ ] Manejar eventos `membership_status` (actualizar banner/modal al instante) y `message`
       (toast + ack) que llegan por el WebSocket.
+- [ ] Manejar `server_key_changed`: volver a consultar la clave, validarla y reconectar.
 - [ ] Cerrar el WebSocket en `logOut()`.
 - [ ] Probar contra el panel real: `docs/CLIENT_INTEGRATION.md` mismo repo trae los endpoints
       corriendo en `http://<ip-del-servidor>:8899`.

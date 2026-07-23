@@ -1,7 +1,18 @@
 const express = require('express');
 const db = require('../db/adminDb');
+const rustdeskKey = require('../rustdeskKey');
 
 const router = express.Router();
+
+router.get('/server-key', (req, res) => {
+  try {
+    const serverKey = rustdeskKey.getPublicKeyInfo();
+    if (!serverKey) return res.status(503).json({ error: 'La key del servidor aun no esta disponible' });
+    res.set('Cache-Control', 'no-store').json(serverKey);
+  } catch (e) {
+    res.status(500).json({ error: `No se pudo leer la key del servidor: ${e.message}` });
+  }
+});
 
 router.get('/plans', (req, res) => {
   const settings = db.prepare(`
