@@ -29,6 +29,10 @@ app.get('/mas-informacion', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'mas-informacion.html'));
 });
 
+app.get('/actualizar-planes', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'actualizar-planes.html'));
+});
+
 app.get('/index', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });

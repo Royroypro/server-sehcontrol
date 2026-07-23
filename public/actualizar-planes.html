@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Actualizar plan | Sehcontrol</title>
+  <meta name="description" content="Consulta y solicita los planes disponibles de Sehcontrol.">
+  <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/">Sehcontrol</a>
+    <nav aria-label="Navegacion principal">
+      <a href="/mas-informacion">Mas informacion</a>
+      <a href="/ayuda">Ayuda</a>
+      <a class="button small" href="/login.html">Iniciar sesion</a>
+    </nav>
+  </header>
+
+  <main>
+    <header class="upgrade-heading">
+      <p class="eyebrow">MEMBRESIAS SEHCONTROL</p>
+      <h1>Actualiza tu plan</h1>
+      <p>Compara las opciones disponibles y solicita el cambio directamente a nuestro equipo.</p>
+    </header>
+
+    <section class="plans-section upgrade-plans" aria-label="Planes disponibles">
+      <div class="plans-grid" id="publicPlans">
+        <p class="plans-loading">Cargando planes disponibles...</p>
+      </div>
+      <div class="sales-contact" id="salesContact" hidden>
+        <span>¿Necesitas una cantidad de equipos o vigencia diferente?</span>
+        <a id="generalWhatsapp" href="#" target="_blank" rel="noopener"></a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>Sehcontrol</span>
+    <nav aria-label="Enlaces legales">
+      <a href="/">Sitio web</a>
+      <a href="/ayuda">Ayuda</a>
+      <a href="/privacy.html">Privacidad</a>
+    </nav>
+  </footer>
+
+  <script>
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
+      })[char]);
+    }
+
+    function formatPlanPrice(plan) {
+      return new Intl.NumberFormat('es-PE', {
+        style: 'currency',
+        currency: plan.currency || 'USD',
+      }).format(plan.price_cents / 100);
+    }
+
+    function whatsappUrl(number, plan) {
+      const digits = String(number || '').replace(/\D/g, '');
+      if (!digits) return null;
+      const text = plan
+        ? `Hola, quiero actualizar mi cuenta al plan ${plan.name} (${formatPlanPrice(plan)}, ${plan.duration_days} dias).`
+        : 'Hola, quiero informacion para actualizar mi plan de Sehcontrol.';
+      return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+    }
+
+    async function loadPlans() {
+      const plansEl = document.getElementById('publicPlans');
+      try {
+        const response = await fetch('/api/public/plans', { cache: 'no-store' });
+        if (!response.ok) throw new Error('No se pudieron cargar los planes');
+        const data = await response.json();
+        const generalUrl = whatsappUrl(data.whatsapp_number);
+
+        if (generalUrl) {
+          const contact = document.getElementById('salesContact');
+          const link = document.getElementById('generalWhatsapp');
+          contact.hidden = false;
+          link.href = generalUrl;
+          link.textContent = `WhatsApp: ${data.whatsapp_number}`;
+        }
+
+        if (!data.plans.length) {
+          plansEl.innerHTML = '<p class="plans-loading">No hay planes publicos disponibles en este momento.</p>';
+          return;
+        }
+
+        plansEl.innerHTML = data.plans.map((plan) => {
+          const url = whatsappUrl(data.whatsapp_number, plan);
+          return `
+            <article class="plan-item">
+              <div class="plan-main">
+                <p class="plan-name">${escapeHtml(plan.name)}</p>
+                ${plan.description ? `<p class="plan-description">${escapeHtml(plan.description)}</p>` : ''}
+              </div>
+              <div class="plan-capacity"><strong>${plan.max_devices}</strong><span>equipo${plan.max_devices === 1 ? '' : 's'}</span></div>
+              <div class="plan-term"><strong>${plan.duration_days}</strong><span>dias</span></div>
+              <div class="plan-cost"><p class="plan-price">${escapeHtml(formatPlanPrice(plan))}</p><span>por periodo</span></div>
+              ${url
+                ? `<a class="button whatsapp-button" href="${url}" target="_blank" rel="noopener">Solicitar cambio</a>`
+                : '<span class="contact-unavailable">Contacto no configurado</span>'}
+            </article>`;
+        }).join('');
+      } catch (error) {
+        plansEl.innerHTML = `<p class="plans-loading">${escapeHtml(error.message)}</p>`;
+      }
+    }
+
+    loadPlans();
+  </script>
+</body>
+</html>

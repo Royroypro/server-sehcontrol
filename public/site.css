@@ -199,6 +199,28 @@ h1, h2, p { letter-spacing: 0; }
   background: var(--soft);
 }
 
+.upgrade-heading {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 88px 24px 64px;
+}
+
+.upgrade-heading h1 {
+  max-width: 760px;
+  margin: 0;
+  font-size: 58px;
+  line-height: 1.02;
+}
+
+.upgrade-heading > p:last-child {
+  max-width: 650px;
+  margin: 22px 0 0;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.upgrade-plans { padding-top: 48px; }
+
 .section-heading {
   display: grid;
   grid-template-columns: minmax(260px, .8fr) minmax(320px, 1.2fr);
@@ -382,6 +404,9 @@ footer {
   .section-heading { grid-template-columns: 1fr; gap: 12px; }
   .section-heading h2 { font-size: 32px; }
   .plans-section { padding-top: 76px; }
+  .upgrade-heading { padding-top: 64px; padding-bottom: 48px; }
+  .upgrade-heading h1 { font-size: 42px; }
+  .upgrade-plans { padding-top: 36px; }
   .plan-item { grid-template-columns: 1fr 1fr; gap: 18px; }
   .plan-main, .plan-cost, .plan-item .whatsapp-button, .plan-item .contact-unavailable { grid-column: 1 / -1; }
   .plan-capacity, .plan-term { padding-top: 10px; border-top: 1px solid #d4d9dc; }
