@@ -1,0 +1,686 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel Admin - Sehcontrol</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar">
+    <h2>Sehcontrol Admin</h2>
+    <nav>
+      <button class="active" data-tab="dashboard">Dashboard</button>
+      <button data-tab="users">Usuarios</button>
+      <button data-tab="plans">Membresias</button>
+      <button data-tab="devices">Equipos</button>
+      <button data-tab="payments">Pagos</button>
+      <button data-tab="alerts">Alertas / Mensajes</button>
+      <button data-tab="activity">Actividad</button>
+      <button data-tab="settings">Configuracion</button>
+    </nav>
+    <button class="secondary logout" onclick="logout()">Cerrar sesion</button>
+  </div>
+  <div class="main" id="main"></div>
+</div>
+
+<script src="/api.js"></script>
+<script>
+let PLANS = [];
+let USERS = [];
+let SETTINGS = { default_currency: 'USD', language: 'es' };
+const CURRENCIES = ['USD', 'PEN', 'ARS', 'MXN', 'COP', 'CLP', 'EUR'];
+
+async function loadSettings() {
+  try { SETTINGS = await api('/api/admin/settings'); } catch (_) { /* se usa el default local si falla */ }
+  return SETTINGS;
+}
+
+const tabs = {
+  dashboard: renderDashboard,
+  users: renderUsers,
+  plans: renderPlans,
+  devices: renderDevices,
+  payments: renderPayments,
+  alerts: renderAlerts,
+  activity: renderActivity,
+  settings: renderSettings,
+};
+
+document.querySelectorAll('.sidebar nav button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar nav button').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    tabs[btn.dataset.tab]();
+  });
+});
+
+function closeModal() {
+  document.querySelectorAll('.modal-backdrop').forEach((m) => m.remove());
+}
+
+// ---------- Dashboard ----------
+async function renderDashboard() {
+  const main = document.getElementById('main');
+  main.innerHTML = '<h1>Dashboard</h1><div id="stats" class="stat-row"></div><div id="renewals"></div>';
+  try {
+    const s = await api('/api/admin/stats');
+    document.getElementById('stats').innerHTML = `
+      <div class="stat"><div class="num">${s.revenueMonthFormatted}</div><div class="label">Ingresos este mes</div></div>
+      <div class="stat"><div class="num">${s.revenueTotalFormatted}</div><div class="label">Ingresos totales</div></div>
+      <div class="stat"><div class="num">${s.users}</div><div class="label">Usuarios totales</div></div>
+      <div class="stat"><div class="num">${s.clients}</div><div class="label">Clientes</div></div>
+      <div class="stat"><div class="num">${s.devices}</div><div class="label">Equipos asignados</div></div>
+      <div class="stat"><div class="num">${s.expiringSoon}</div><div class="label">Planes por vencer (7 dias)</div></div>
+      <div class="stat"><div class="num">${s.expired}</div><div class="label">Planes vencidos</div></div>
+      <div class="stat"><div class="num">${s.recentAlerts}</div><div class="label">Alertas (7 dias)</div></div>
+      ${!s.hbbsConnected ? '<div class="stat" style="border-color:var(--danger)"><div class="label">No se detecto la base de datos de hbbs (db_v2.sqlite3). El estado en vivo de equipos no esta disponible.</div></div>' : ''}
+      ${s.otherCurrencyPaidCount ? `<div class="stat" style="border-color:var(--warn)"><div class="label">${s.otherCurrencyPaidCount} pago(s) pagado(s) en otra moneda (no incluidos arriba) — moneda de la plataforma: ${s.revenueCurrency}</div></div>` : ''}
+    `;
+    if (s.upcomingRenewals.length) {
+      document.getElementById('renewals').innerHTML = `
+        <h1 style="font-size:16px;margin-top:24px;">Vencen en los proximos 7 dias</h1>
+        <table><thead><tr><th>Email</th><th>Plan</th><th>Vence</th></tr></thead><tbody>
+          ${s.upcomingRenewals.map((u) => `<tr><td>${u.email}</td><td>${u.plan_name || '-'}</td><td>${fmtDate(u.plan_expires_at)}</td></tr>`).join('')}
+        </tbody></table>`;
+    }
+  } catch (e) {
+    main.innerHTML += `<div class="error">${e.message}</div>`;
+  }
+}
+
+// ---------- Plans ----------
+async function loadPlans() {
+  PLANS = await api('/api/admin/plans');
+  return PLANS;
+}
+
+async function renderPlans() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="toolbar"><h1>Membresias / Planes</h1><button onclick="openPlanModal()">+ Nuevo plan</button></div>
+    <table><thead><tr><th>Nombre</th><th>Limite equipos</th><th>Precio</th><th>Duracion</th><th></th></tr></thead>
+    <tbody id="plansBody"></tbody></table>
+  `;
+  await loadPlans();
+  const body = document.getElementById('plansBody');
+  body.innerHTML = PLANS.length ? PLANS.map((p) => `
+    <tr>
+      <td>${p.name}</td>
+      <td>${p.max_devices}</td>
+      <td>${(p.price_cents / 100).toFixed(2)} ${p.currency || 'USD'}</td>
+      <td>${p.duration_days} dias</td>
+      <td class="row-actions">
+        <button class="secondary" onclick='openPlanModal(${JSON.stringify(p)})'>Editar</button>
+        <button class="danger" onclick="deletePlan(${p.id})">Borrar</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">Sin planes todavia</td></tr>';
+}
+
+function openPlanModal(plan) {
+  const isEdit = !!plan;
+  const defaultCurrency = isEdit ? plan.currency : SETTINGS.default_currency;
+  const div = document.createElement('div');
+  div.className = 'modal-backdrop';
+  div.innerHTML = `
+    <form class="card modal">
+      <h2>${isEdit ? 'Editar plan' : 'Nuevo plan'}</h2>
+      <label>Nombre</label><input name="name" required value="${isEdit ? plan.name : ''}">
+      <label>Limite de equipos</label><input name="max_devices" type="number" min="1" required value="${isEdit ? plan.max_devices : 1}">
+      <label>Precio</label>
+      <div style="display:flex;gap:8px;">
+        <input name="price" type="number" step="0.01" min="0" style="flex:2;" value="${isEdit ? (plan.price_cents / 100).toFixed(2) : 0}">
+        <select name="currency" style="flex:1;">
+          ${CURRENCIES.map((c) => `<option value="${c}" ${defaultCurrency === c ? 'selected' : ''}>${c}</option>`).join('')}
+        </select>
+      </div>
+      <label>Duracion (dias)</label><input name="duration_days" type="number" min="1" required value="${isEdit ? plan.duration_days : 30}">
+      <div class="error" id="modalErr"></div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="secondary" onclick="closeModal()">Cancelar</button>
+        <button type="submit">Guardar</button>
+      </div>
+    </form>`;
+  document.body.appendChild(div);
+  div.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const payload = {
+      name: f.name.value,
+      max_devices: Number(f.max_devices.value),
+      price_cents: Math.round(Number(f.price.value) * 100),
+      currency: f.currency.value,
+      duration_days: Number(f.duration_days.value),
+    };
+    try {
+      if (isEdit) await api(`/api/admin/plans/${plan.id}`, { method: 'PUT', body: payload });
+      else await api('/api/admin/plans', { method: 'POST', body: payload });
+      closeModal();
+      renderPlans();
+    } catch (err) {
+      div.querySelector('#modalErr').textContent = err.message;
+    }
+  });
+}
+
+async function deletePlan(id) {
+  if (!confirm('¿Borrar este plan?')) return;
+  try { await api(`/api/admin/plans/${id}`, { method: 'DELETE' }); renderPlans(); }
+  catch (e) { alert(e.message); }
+}
+
+// ---------- Users ----------
+async function renderUsers() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="toolbar"><h1>Usuarios</h1><button onclick="openUserModal()">+ Nuevo usuario</button></div>
+    <table><thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Plan</th><th>Equipos</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
+    <tbody id="usersBody"></tbody></table>
+  `;
+  await loadPlans();
+  USERS = await api('/api/admin/users');
+  const body = document.getElementById('usersBody');
+  body.innerHTML = USERS.length ? USERS.map((u) => `
+    <tr>
+      <td>${u.name || '-'}</td>
+      <td>${u.email}</td>
+      <td><span class="badge ${u.role === 'admin' ? 'admin' : ''}">${u.role}</span></td>
+      <td>${u.plan_name ? `${u.plan_name} (${u.max_devices})` : '-'}</td>
+      <td>${u.device_count}${u.max_devices ? ' / ' + u.max_devices : ''}</td>
+      <td>${fmtDate(u.plan_expires_at)} ${planBadge(u.plan_expires_at)}</td>
+      <td><span class="badge ${u.status}">${u.status}</span></td>
+      <td class="row-actions">
+        <button class="secondary" onclick='openUserModal(${JSON.stringify(u)})'>Editar</button>
+        <button class="danger" onclick="deleteUser(${u.id})">Borrar</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="8" class="empty">Sin usuarios todavia</td></tr>';
+}
+
+function openUserModal(user) {
+  const isEdit = !!user;
+  const planOptions = ['<option value="">Sin plan</option>']
+    .concat(PLANS.map((p) => `<option value="${p.id}" ${isEdit && user.plan_id === p.id ? 'selected' : ''}>${p.name}</option>`))
+    .join('');
+  const div = document.createElement('div');
+  div.className = 'modal-backdrop';
+  div.innerHTML = `
+    <form class="card modal">
+      <h2>${isEdit ? 'Editar usuario' : 'Nuevo usuario'}</h2>
+      <label>Nombre</label><input name="name" value="${isEdit ? (user.name || '') : ''}" placeholder="ej. Juan Perez">
+      <label>Email</label><input name="email" type="email" required value="${isEdit ? user.email : ''}" ${isEdit ? 'readonly' : ''}>
+      <label>${isEdit ? 'Nueva contrasena (opcional)' : 'Contrasena'}</label>
+      <input name="password" type="password" ${isEdit ? '' : 'required'}>
+      <label>Rol</label>
+      <select name="role">
+        <option value="client" ${isEdit && user.role === 'client' ? 'selected' : ''}>Cliente</option>
+        <option value="admin" ${isEdit && user.role === 'admin' ? 'selected' : ''}>Administrador</option>
+      </select>
+      <label>Plan</label>
+      <select name="plan_id">${planOptions}</select>
+      ${isEdit ? `
+      <label><input type="checkbox" name="renew" style="width:auto;display:inline-block;margin-right:6px;">Renovar plan desde hoy (recalcula las fechas de abajo)</label>
+      <label>Fecha de inicio</label><input name="plan_started_at" type="date" value="${toDateInputValue(user.plan_started_at)}">
+      <label>Fecha de vencimiento</label><input name="plan_expires_at" type="date" value="${toDateInputValue(user.plan_expires_at)}">
+      <label>Estado</label>
+      <select name="status">
+        <option value="active" ${user.status === 'active' ? 'selected' : ''}>Activo</option>
+        <option value="suspended" ${user.status === 'suspended' ? 'selected' : ''}>Suspendido</option>
+      </select>` : ''}
+      <div class="error" id="modalErr"></div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="secondary" onclick="closeModal()">Cancelar</button>
+        <button type="submit">Guardar</button>
+      </div>
+    </form>`;
+  document.body.appendChild(div);
+  div.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      if (isEdit) {
+        await api(`/api/admin/users/${user.id}`, {
+          method: 'PUT',
+          body: {
+            name: f.name.value,
+            role: f.role.value,
+            status: f.status.value,
+            plan_id: f.plan_id.value || null,
+            password: f.password.value || undefined,
+            renew: f.renew.checked,
+            plan_started_at: f.plan_started_at.value ? new Date(f.plan_started_at.value).toISOString() : null,
+            plan_expires_at: f.plan_expires_at.value ? new Date(f.plan_expires_at.value).toISOString() : null,
+          },
+        });
+      } else {
+        await api('/api/admin/users', {
+          method: 'POST',
+          body: { name: f.name.value, email: f.email.value, password: f.password.value, role: f.role.value, plan_id: f.plan_id.value || null },
+        });
+      }
+      closeModal();
+      renderUsers();
+    } catch (err) {
+      div.querySelector('#modalErr').textContent = err.message;
+    }
+  });
+}
+
+async function deleteUser(id) {
+  if (!confirm('¿Borrar este usuario y sus equipos asignados?')) return;
+  try { await api(`/api/admin/users/${id}`, { method: 'DELETE' }); renderUsers(); }
+  catch (e) { alert(e.message); }
+}
+
+// ---------- Devices ----------
+async function renderDevices() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="toolbar"><h1>Equipos</h1><button onclick="openDeviceModal()">+ Asignar equipo</button></div>
+    <table><thead><tr><th>ID Sehcontrol</th><th>Alias</th><th>Propietario</th><th>Estado</th><th>Equipo</th><th>Usuario</th><th>IP</th><th>Asignado</th><th></th></tr></thead>
+    <tbody id="devicesBody"></tbody></table>
+  `;
+  await loadPlans();
+  USERS = await api('/api/admin/users');
+  const devices = await api('/api/admin/devices');
+  const body = document.getElementById('devicesBody');
+  body.innerHTML = devices.length ? devices.map((d) => `
+    <tr>
+      <td>${d.rustdesk_id}</td>
+      <td>${d.alias || '-'}</td>
+      <td>${d.owner_email}</td>
+      <td>${deviceStatusBadge(d.live)}</td>
+      <td>${d.live?.hostname || '-'}${d.live?.os ? `<br><span style="font-size:11px;color:var(--muted)">${d.live.os}</span>` : ''}</td>
+      <td>${d.live?.username || '-'}</td>
+      <td>${d.live?.last_known_ip || '-'}</td>
+      <td>${fmtDate(d.claimed_at)}</td>
+      <td class="row-actions"><button class="danger" onclick="unassignDevice(${d.id})">Quitar</button></td>
+    </tr>`).join('') : '<tr><td colspan="9" class="empty">Sin equipos asignados todavia</td></tr>';
+}
+
+
+async function openDeviceModal() {
+  const userOptions = USERS.map((u) => `<option value="${u.id}">${u.name ? u.name + ' - ' : ''}${u.email} (${u.device_count}${u.max_devices ? '/' + u.max_devices : ''})</option>`).join('');
+  let unclaimed = [];
+  try { unclaimed = await api('/api/admin/devices/unclaimed'); } catch (_) { /* si falla, se sigue con entrada manual */ }
+  const pickerOptions = ['<option value="">-- Escribir el ID manualmente --</option>']
+    .concat(unclaimed.map((p) => {
+      const label = p.hostname ? `${p.hostname} (${p.rustdesk_id})` : p.rustdesk_id;
+      const extra = [p.online ? 'en linea' : null, p.last_known_ip].filter(Boolean).join(', ');
+      return `<option value="${p.rustdesk_id}">${label}${extra ? ' - ' + extra : ''}</option>`;
+    }))
+    .join('');
+  const div = document.createElement('div');
+  div.className = 'modal-backdrop';
+  div.innerHTML = `
+    <form class="card modal">
+      <h2>Asignar equipo</h2>
+      ${unclaimed.length ? `
+      <label>Equipos registrados sin asignar (${unclaimed.length})</label>
+      <select name="picker">${pickerOptions}</select>
+      ` : '<p style="font-size:12px;color:var(--muted);margin-top:12px;">No hay equipos registrados en el servidor sin asignar todavia. Escribe el ID manualmente.</p>'}
+      <label>ID de Sehcontrol</label><input name="rustdesk_id" required placeholder="ej. 123456789">
+      <label>Alias (opcional)</label><input name="alias" placeholder="ej. Laptop de Juan">
+      <label>Propietario</label><select name="owner_user_id" required>${userOptions}</select>
+      <div class="error" id="modalErr"></div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="secondary" onclick="closeModal()">Cancelar</button>
+        <button type="submit">Asignar</button>
+      </div>
+    </form>`;
+  document.body.appendChild(div);
+  const picker = div.querySelector('[name="picker"]');
+  if (picker) {
+    picker.addEventListener('change', () => {
+      div.querySelector('[name="rustdesk_id"]').value = picker.value;
+    });
+  }
+  div.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api('/api/admin/devices', {
+        method: 'POST',
+        body: { rustdesk_id: f.rustdesk_id.value, alias: f.alias.value, owner_user_id: Number(f.owner_user_id.value) },
+      });
+      closeModal();
+      renderDevices();
+    } catch (err) {
+      div.querySelector('#modalErr').textContent = err.message;
+    }
+  });
+}
+
+async function unassignDevice(id) {
+  if (!confirm('¿Quitar este equipo del usuario?')) return;
+  try { await api(`/api/admin/devices/${id}`, { method: 'DELETE' }); renderDevices(); }
+  catch (e) { alert(e.message); }
+}
+
+// ---------- Pagos ----------
+async function renderPayments() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="toolbar"><h1>Pagos y adelantos</h1><button onclick="openPaymentModal()">+ Registrar pago</button></div>
+    <table><thead><tr><th>#</th><th>Usuario</th><th>Monto</th><th>Metodo</th><th>Concepto</th><th>Dias agregados</th><th>Estado</th><th>Fecha</th><th></th></tr></thead>
+    <tbody id="paymentsBody"></tbody></table>
+  `;
+  await loadPlans();
+  USERS = await api('/api/admin/users');
+  const payments = await api('/api/admin/payments');
+  const body = document.getElementById('paymentsBody');
+  body.innerHTML = payments.length ? payments.map((p) => `
+    <tr>
+      <td>${String(p.receipt_number).padStart(6, '0')}</td>
+      <td>${p.user_email}</td>
+      <td>${(p.amount_cents / 100).toFixed(2)} ${p.currency}</td>
+      <td>${p.method}</td>
+      <td>${p.concept || '-'}</td>
+      <td>${p.days_added ? '+' + p.days_added : '-'}</td>
+      <td><span class="badge ${p.status === 'paid' ? 'active' : 'warn'}">${p.status === 'paid' ? 'Pagado' : 'Debe'}</span></td>
+      <td>${fmtDate(p.created_at)}</td>
+      <td class="row-actions">
+        ${p.status === 'pending' ? `<button class="secondary" onclick="markPaymentPaid(${p.id})">Marcar pagado</button>` : ''}
+        <button class="secondary" onclick="window.open('/api/admin/payments/${p.id}/receipt','_blank')">Comprobante</button>
+        <button class="danger" onclick="deletePayment(${p.id})">Borrar</button>
+      </td>
+    </tr>`).join('') : '<tr><td colspan="9" class="empty">Sin pagos registrados todavia</td></tr>';
+}
+
+async function markPaymentPaid(id) {
+  try { await api(`/api/admin/payments/${id}/status`, { method: 'PUT', body: { status: 'paid' } }); renderPayments(); }
+  catch (e) { alert(e.message); }
+}
+
+function openPaymentModal() {
+  const userOptions = USERS.map((u) => `<option value="${u.id}">${u.name ? u.name + ' - ' : ''}${u.email}</option>`).join('');
+  const div = document.createElement('div');
+  div.className = 'modal-backdrop';
+  div.innerHTML = `
+    <form class="card modal">
+      <h2>Registrar pago</h2>
+      <label>Usuario</label><select name="user_id" required>${userOptions}</select>
+      <label>Monto</label>
+      <div style="display:flex;gap:8px;">
+        <input name="amount" type="number" step="0.01" min="0" required style="flex:2;">
+        <select name="currency" style="flex:1;">
+          ${CURRENCIES.map((c) => `<option value="${c}" ${SETTINGS.default_currency === c ? 'selected' : ''}>${c}</option>`).join('')}
+        </select>
+      </div>
+      <label>Metodo</label>
+      <select name="method">
+        <option value="cash">Efectivo</option>
+        <option value="transfer">Transferencia</option>
+        <option value="card">Tarjeta</option>
+        <option value="other">Otro</option>
+      </select>
+      <label>Estado</label>
+      <select name="status">
+        <option value="paid">Pagado</option>
+        <option value="pending">Debe (pendiente)</option>
+      </select>
+      <label>Concepto</label><input name="concept" placeholder="ej. Renovacion mensual">
+      <label>Dias a agregar al plan (opcional, para adelantos parciales; si el pago queda "Debe", se aplican recien cuando lo marques pagado)</label>
+      <input name="days_added" type="number" min="0" placeholder="ej. 15">
+      <label>Nota</label><input name="note">
+      <div class="error" id="modalErr"></div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="secondary" onclick="closeModal()">Cancelar</button>
+        <button type="submit">Registrar</button>
+      </div>
+    </form>`;
+  document.body.appendChild(div);
+  div.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api('/api/admin/payments', {
+        method: 'POST',
+        body: {
+          user_id: Number(f.user_id.value),
+          amount_cents: Math.round(Number(f.amount.value) * 100),
+          currency: f.currency.value,
+          method: f.method.value,
+          status: f.status.value,
+          concept: f.concept.value,
+          days_added: f.days_added.value ? Number(f.days_added.value) : undefined,
+          note: f.note.value,
+        },
+      });
+      closeModal();
+      renderPayments();
+    } catch (err) {
+      div.querySelector('#modalErr').textContent = err.message;
+    }
+  });
+}
+
+async function deletePayment(id) {
+  if (!confirm('¿Borrar este pago del historial? (no revierte los dias ya agregados)')) return;
+  try { await api(`/api/admin/payments/${id}`, { method: 'DELETE' }); renderPayments(); }
+  catch (e) { alert(e.message); }
+}
+
+// ---------- Alertas / Mensajes ----------
+async function renderAlerts() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="toolbar"><h1>Alertas y mensajes</h1>
+      <div style="display:flex;gap:8px;">
+        <button class="secondary" onclick="checkExpiryNow()">Revisar vencimientos ahora</button>
+        <button onclick="openMessageModal()">+ Mandar mensaje</button>
+      </div>
+    </div>
+    <table><thead><tr><th>Tipo</th><th>Destinatario</th><th>Titulo</th><th>Mensaje</th><th>Email</th><th>Fecha</th></tr></thead>
+    <tbody id="alertsBody"></tbody></table>
+  `;
+  await loadPlans();
+  USERS = await api('/api/admin/users');
+  const alerts = await api('/api/admin/alerts');
+  const body = document.getElementById('alertsBody');
+  body.innerHTML = alerts.length ? alerts.map((a) => `
+    <tr>
+      <td><span class="badge ${a.type === 'expired' || a.type === 'suspended' ? 'suspended' : a.type === 'expiry_warning' ? 'warn' : ''}">${a.type}</span></td>
+      <td>${a.user_email || 'Todos'}</td>
+      <td>${a.title}</td>
+      <td>${a.message}</td>
+      <td>${a.email_sent ? '✓' : '-'}</td>
+      <td>${fmtDate(a.created_at)}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">Sin alertas todavia</td></tr>';
+}
+
+async function checkExpiryNow() {
+  try {
+    const res = await api('/api/admin/alerts/check-expiry', { method: 'POST' });
+    alert(`Se generaron ${res.created} alerta(s) nueva(s).`);
+    renderAlerts();
+  } catch (e) { alert(e.message); }
+}
+
+function openMessageModal() {
+  const userOptions = ['<option value="">Todos los clientes (broadcast)</option>']
+    .concat(USERS.filter((u) => u.role === 'client').map((u) => `<option value="${u.id}">${u.name ? u.name + ' - ' : ''}${u.email}</option>`))
+    .join('');
+  const div = document.createElement('div');
+  div.className = 'modal-backdrop';
+  div.innerHTML = `
+    <form class="card modal">
+      <h2>Mandar mensaje</h2>
+      <label>Destinatario</label><select name="user_id">${userOptions}</select>
+      <label>Titulo</label><input name="title" required>
+      <label>Mensaje</label><input name="message" required>
+      <label><input type="checkbox" name="email" style="width:auto;display:inline-block;margin-right:6px;">Tambien enviar por correo (requiere SMTP configurado)</label>
+      <div class="error" id="modalErr"></div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="secondary" onclick="closeModal()">Cancelar</button>
+        <button type="submit">Mandar</button>
+      </div>
+    </form>`;
+  document.body.appendChild(div);
+  div.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api('/api/admin/alerts/message', {
+        method: 'POST',
+        body: {
+          user_id: f.user_id.value ? Number(f.user_id.value) : null,
+          title: f.title.value,
+          message: f.message.value,
+          email: f.email.checked,
+        },
+      });
+      closeModal();
+      renderAlerts();
+    } catch (err) {
+      div.querySelector('#modalErr').textContent = err.message;
+    }
+  });
+}
+
+// ---------- Actividad ----------
+async function renderActivity() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <h1>Bitacora de actividad</h1>
+    <table><thead><tr><th>Fecha</th><th>Admin</th><th>Accion</th><th>Sobre</th><th>Detalle</th></tr></thead>
+    <tbody id="activityBody"></tbody></table>
+  `;
+  const rows = await api('/api/admin/activity');
+  document.getElementById('activityBody').innerHTML = rows.length ? rows.map((a) => `
+    <tr>
+      <td>${fmtDate(a.created_at)}</td>
+      <td>${a.actor_email || 'sistema'}</td>
+      <td>${a.action}</td>
+      <td>${a.target_type || ''} ${a.target_id || ''}</td>
+      <td>${a.detail || '-'}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">Sin actividad registrada todavia</td></tr>';
+}
+
+// ---------- Configuracion ----------
+async function renderSettings() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <h1>Configuracion</h1>
+    <div class="card" style="max-width:520px;margin-bottom:20px;">
+      <h2 style="font-size:15px;margin-top:0;">Datos de la plataforma</h2>
+      <form id="platformForm">
+        <label>Nombre del negocio</label><input name="business_name" required>
+        <label>CUIT / RFC / identificacion fiscal (opcional)</label><input name="tax_id">
+        <label>Direccion (opcional)</label><input name="address">
+        <label>Telefono (opcional)</label><input name="phone">
+        <label>Email de contacto (opcional)</label><input name="contact_email" type="email">
+        <div style="display:flex;gap:8px;">
+          <div style="flex:1;">
+            <label>Moneda por defecto</label>
+            <select name="default_currency">
+              ${['USD','ARS','MXN','COP','CLP','PEN','EUR'].map((c) => `<option value="${c}">${c}</option>`).join('')}
+            </select>
+          </div>
+          <div style="flex:1;">
+            <label>Idioma (comprobantes PDF)</label>
+            <select name="language">
+              <option value="es">Espanol</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+        </div>
+        <div class="error" id="platformErr"></div>
+        <div class="msg-ok" id="platformOk" style="display:none;">Guardado.</div>
+        <button type="submit" style="margin-top:14px;">Guardar</button>
+      </form>
+    </div>
+
+    <div class="card" style="max-width:520px;">
+      <h2 style="font-size:15px;margin-top:0;">Mi cuenta</h2>
+      <form id="profileForm">
+        <label>Nombre</label><input name="name">
+        <label>Email (no editable aqui)</label><input name="email" disabled>
+        <label>Contrasena actual (solo si vas a cambiarla)</label><input name="current_password" type="password">
+        <label>Nueva contrasena (opcional)</label><input name="new_password" type="password">
+        <div class="error" id="profileErr"></div>
+        <div class="msg-ok" id="profileOk" style="display:none;">Guardado.</div>
+        <button type="submit" style="margin-top:14px;">Guardar</button>
+      </form>
+    </div>
+  `;
+
+  try {
+    const settings = await api('/api/admin/settings');
+    const pf = document.getElementById('platformForm');
+    pf.business_name.value = settings.business_name || '';
+    pf.tax_id.value = settings.tax_id || '';
+    pf.address.value = settings.address || '';
+    pf.phone.value = settings.phone || '';
+    pf.contact_email.value = settings.contact_email || '';
+    pf.default_currency.value = settings.default_currency || 'USD';
+    pf.language.value = settings.language || 'es';
+  } catch (e) {
+    document.getElementById('platformErr').textContent = e.message;
+  }
+
+  document.getElementById('platformForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const okEl = document.getElementById('platformOk');
+    const errEl = document.getElementById('platformErr');
+    okEl.style.display = 'none';
+    errEl.textContent = '';
+    try {
+      SETTINGS = await api('/api/admin/settings', {
+        method: 'PUT',
+        body: {
+          business_name: f.business_name.value,
+          tax_id: f.tax_id.value,
+          address: f.address.value,
+          phone: f.phone.value,
+          contact_email: f.contact_email.value,
+          default_currency: f.default_currency.value,
+          language: f.language.value,
+        },
+      });
+      okEl.style.display = 'block';
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  });
+
+  try {
+    const { user } = await api('/api/auth/me');
+    const prf = document.getElementById('profileForm');
+    prf.name.value = user.name || '';
+    prf.email.value = user.email;
+  } catch (e) {
+    document.getElementById('profileErr').textContent = e.message;
+  }
+
+  document.getElementById('profileForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const okEl = document.getElementById('profileOk');
+    const errEl = document.getElementById('profileErr');
+    okEl.style.display = 'none';
+    errEl.textContent = '';
+    try {
+      await api('/api/auth/me', {
+        method: 'PUT',
+        body: {
+          name: f.name.value,
+          current_password: f.current_password.value || undefined,
+          new_password: f.new_password.value || undefined,
+        },
+      });
+      f.current_password.value = '';
+      f.new_password.value = '';
+      okEl.style.display = 'block';
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  });
+}
+
+loadSettings();
+renderDashboard();
+</script>
+</body>
+</html>

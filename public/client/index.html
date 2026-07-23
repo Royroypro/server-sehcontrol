@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mi cuenta - Sehcontrol</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar">
+    <h2>Mi cuenta</h2>
+    <nav>
+      <button class="active" data-tab="plan">Mi plan</button>
+      <button data-tab="devices">Mis equipos</button>
+      <button data-tab="payments">Mis pagos</button>
+      <button data-tab="messages">Mensajes <span id="unreadBadge"></span></button>
+    </nav>
+    <button class="secondary logout" onclick="logout()">Cerrar sesion</button>
+  </div>
+  <div class="main" id="main"></div>
+</div>
+
+<script src="/api.js"></script>
+<script>
+const tabs = { plan: renderPlan, devices: renderDevices, payments: renderPayments, messages: renderMessages };
+document.querySelectorAll('.sidebar nav button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.sidebar nav button').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    tabs[btn.dataset.tab]();
+  });
+});
+
+async function renderPlan() {
+  const main = document.getElementById('main');
+  main.innerHTML = '<h1>Mi plan</h1><div id="planInfo" class="stat-row"></div>';
+  try {
+    const p = await api('/api/client/me/plan');
+    document.getElementById('planInfo').innerHTML = `
+      <div class="stat"><div class="num">${p.plan_name}</div><div class="label">Plan actual</div></div>
+      <div class="stat"><div class="num">${p.device_count} / ${p.max_devices}</div><div class="label">Equipos usados</div></div>
+      <div class="stat"><div class="num">${fmtDate(p.plan_expires_at)}</div><div class="label">Vence ${planBadge(p.plan_expires_at)}</div></div>
+      <div class="stat"><div class="num"><span class="badge ${p.status}">${p.status}</span></div><div class="label">Estado de la cuenta</div></div>
+    `;
+  } catch (e) {
+    main.innerHTML += `<div class="error">${e.message}</div>`;
+  }
+}
+
+async function renderDevices() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <div class="toolbar"><h1>Mis equipos</h1><button onclick="openClaimModal()">+ Reclamar equipo</button></div>
+    <table><thead><tr><th>ID Sehcontrol</th><th>Alias</th><th>Estado</th><th>Equipo</th><th>Usuario</th><th>Reclamado</th><th></th></tr></thead>
+    <tbody id="devicesBody"></tbody></table>
+  `;
+  const devices = await api('/api/client/me/devices');
+  document.getElementById('devicesBody').innerHTML = devices.length ? devices.map((d) => `
+    <tr>
+      <td>${d.rustdesk_id}</td>
+      <td>${d.alias || '-'}</td>
+      <td>${deviceStatusBadge(d.live)}</td>
+      <td>${d.live?.hostname || '-'}${d.live?.os ? `<br><span style="font-size:11px;color:var(--muted)">${d.live.os}</span>` : ''}</td>
+      <td>${d.live?.username || '-'}</td>
+      <td>${fmtDate(d.claimed_at)}</td>
+      <td class="row-actions"><button class="danger" onclick="releaseDevice(${d.id})">Liberar</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" class="empty">Aun no has reclamado ningun equipo</td></tr>';
+}
+
+function openClaimModal() {
+  const div = document.createElement('div');
+  div.className = 'modal-backdrop';
+  div.innerHTML = `
+    <form class="card modal">
+      <h2>Reclamar equipo</h2>
+      <label>ID de Sehcontrol</label><input name="rustdesk_id" required placeholder="ej. 123456789">
+      <label>Alias (opcional)</label><input name="alias" placeholder="ej. Mi laptop">
+      <div class="error" id="modalErr"></div>
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="secondary" onclick="document.querySelector('.modal-backdrop').remove()">Cancelar</button>
+        <button type="submit">Reclamar</button>
+      </div>
+    </form>`;
+  document.body.appendChild(div);
+  div.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api('/api/client/me/devices', { method: 'POST', body: { rustdesk_id: f.rustdesk_id.value, alias: f.alias.value } });
+      div.remove();
+      renderDevices();
+    } catch (err) {
+      div.querySelector('#modalErr').textContent = err.message;
+    }
+  });
+}
+
+async function releaseDevice(id) {
+  if (!confirm('¿Liberar este equipo de tu cuenta?')) return;
+  try { await api(`/api/client/me/devices/${id}`, { method: 'DELETE' }); renderDevices(); }
+  catch (e) { alert(e.message); }
+}
+
+async function renderPayments() {
+  const main = document.getElementById('main');
+  main.innerHTML = `
+    <h1>Mis pagos</h1>
+    <table><thead><tr><th>Fecha</th><th>Monto</th><th>Metodo</th><th>Concepto</th><th>Dias agregados</th></tr></thead>
+    <tbody id="paymentsBody"></tbody></table>
+  `;
+  const payments = await api('/api/client/me/payments');
+  document.getElementById('paymentsBody').innerHTML = payments.length ? payments.map((p) => `
+    <tr>
+      <td>${fmtDate(p.created_at)}</td>
+      <td>${(p.amount_cents / 100).toFixed(2)} ${p.currency}</td>
+      <td>${p.method}</td>
+      <td>${p.concept || '-'}</td>
+      <td>${p.days_added ? '+' + p.days_added : '-'}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">Sin pagos registrados todavia</td></tr>';
+}
+
+async function renderMessages() {
+  const main = document.getElementById('main');
+  main.innerHTML = '<h1>Mensajes</h1><div id="messagesList"></div>';
+  const alerts = await api('/api/client/me/alerts');
+  document.getElementById('messagesList').innerHTML = alerts.length ? alerts.map((a) => `
+    <div class="card" style="margin-bottom:10px;${a.read_by_me ? 'opacity:0.6;' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:start;">
+        <div>
+          <strong>${a.title}</strong>
+          <div style="font-size:13px;color:var(--muted);margin-top:4px;">${a.message}</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:6px;">${fmtDate(a.created_at)}</div>
+        </div>
+        ${!a.read_by_me ? `<button class="secondary" onclick="markAlertRead(${a.id})">Marcar leido</button>` : ''}
+      </div>
+    </div>`).join('') : '<div class="empty">No tienes mensajes todavia</div>';
+  updateUnreadBadge(alerts);
+}
+
+async function markAlertRead(id) {
+  try { await api(`/api/client/me/alerts/${id}/read`, { method: 'POST' }); renderMessages(); }
+  catch (e) { alert(e.message); }
+}
+
+async function updateUnreadBadge(alerts) {
+  const unread = alerts.filter((a) => !a.read_by_me).length;
+  document.getElementById('unreadBadge').textContent = unread ? `(${unread})` : '';
+}
+
+renderPlan();
+api('/api/client/me/alerts').then(updateUnreadBadge).catch(() => {});
+</script>
+</body>
+</html>
