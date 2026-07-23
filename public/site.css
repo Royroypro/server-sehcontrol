@@ -178,6 +178,7 @@ h1, h2, p { letter-spacing: 0; }
 }
 .whatsapp-button { min-width: 190px; background: var(--green); border-color: var(--green); }
 .whatsapp-button:hover { background: #0f6947; }
+.download-client[hidden] { display: none; }
 
 .sales-contact {
   display: flex;

@@ -26,6 +26,7 @@
         <p class="account-note">El inicio de sesion es para clientes que ya tienen una cuenta activa.</p>
         <div class="actions">
           <a class="button" href="/login.html">Entrar a mi cuenta</a>
+          <a class="button secondary download-client" href="/api/public/client-download" hidden>Descargar Sehcontrol</a>
           <a class="text-link whatsapp-link" href="#" hidden>Solicitar una cuenta por WhatsApp</a>
         </div>
       </div>
@@ -147,7 +148,21 @@
       }
     }
 
+    async function loadClientDownload() {
+      try {
+        const info = await fetch('/api/public/client-download/status', { cache: 'no-store' }).then((res) => res.json());
+        if (!info.available) return;
+        document.querySelectorAll('.download-client').forEach((link) => {
+          link.hidden = false;
+          link.download = info.filename;
+        });
+      } catch (_) {
+        // La pagina sigue siendo util aunque todavia no exista un instalador.
+      }
+    }
+
     loadPublicPlans();
+    loadClientDownload();
   </script>
 </body>
 </html>

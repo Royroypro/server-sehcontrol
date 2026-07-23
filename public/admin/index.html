@@ -638,6 +638,22 @@ async function renderSettings() {
       <button type="button" class="danger" style="margin-top:12px;" onclick="rotateRustdeskKey()">Generar nueva key</button>
     </div>
 
+    <div class="card" style="max-width:520px;margin-bottom:20px;">
+      <h2 style="font-size:15px;margin-top:0;">Aplicacion para Windows</h2>
+      <p class="settings-help">Sube el ejecutable que los visitantes descargaran como sehcontrol.exe.</p>
+      <form id="clientUploadForm">
+        <label>Archivo EXE</label>
+        <input name="client_exe" type="file" accept=".exe,application/vnd.microsoft.portable-executable,application/x-msdownload" required>
+        <p class="settings-help" id="clientDownloadStatus">No hay un archivo publicado.</p>
+        <div class="error" id="clientUploadErr"></div>
+        <div class="msg-ok" id="clientUploadOk" style="display:none;"></div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:14px;">
+          <button type="submit">Subir y publicar</button>
+          <a class="button secondary" id="adminClientDownload" href="/api/public/client-download" hidden>Descargar actual</a>
+        </div>
+      </form>
+    </div>
+
     <div class="card" style="max-width:520px;">
       <h2 style="font-size:15px;margin-top:0;">Mi cuenta</h2>
       <form id="profileForm">
@@ -701,6 +717,9 @@ async function renderSettings() {
     document.getElementById('keyErr').textContent = e.message;
   }
 
+  await refreshClientDownloadStatus();
+  document.getElementById('clientUploadForm').addEventListener('submit', uploadClientExe);
+
   try {
     const { user } = await api('/api/auth/me');
     const prf = document.getElementById('profileForm');
@@ -733,6 +752,68 @@ async function renderSettings() {
       errEl.textContent = err.message;
     }
   });
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function refreshClientDownloadStatus() {
+  const statusEl = document.getElementById('clientDownloadStatus');
+  const downloadEl = document.getElementById('adminClientDownload');
+  try {
+    const info = await api('/api/admin/settings/client-download');
+    if (!info.available) {
+      statusEl.textContent = 'No hay un archivo publicado.';
+      downloadEl.hidden = true;
+      return;
+    }
+    statusEl.textContent = `Publicado: ${info.filename} | ${formatFileSize(info.size_bytes)} | ${fmtDate(info.updated_at)}`;
+    downloadEl.hidden = false;
+  } catch (e) {
+    document.getElementById('clientUploadErr').textContent = e.message;
+  }
+}
+
+async function uploadClientExe(event) {
+  event.preventDefault();
+  const form = event.target;
+  const file = form.client_exe.files[0];
+  const errEl = document.getElementById('clientUploadErr');
+  const okEl = document.getElementById('clientUploadOk');
+  const button = form.querySelector('button[type="submit"]');
+  errEl.textContent = '';
+  okEl.style.display = 'none';
+  if (!file || !file.name.toLowerCase().endsWith('.exe')) {
+    errEl.textContent = 'Selecciona un archivo con extension .exe.';
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = 'Subiendo...';
+  try {
+    const res = await fetch('/api/admin/settings/client-download', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      window.location.href = '/login.html';
+      return;
+    }
+    if (!res.ok) throw new Error(data.error || 'No se pudo subir el archivo');
+    form.reset();
+    okEl.textContent = 'sehcontrol.exe fue publicado correctamente.';
+    okEl.style.display = 'block';
+    await refreshClientDownloadStatus();
+  } catch (e) {
+    errEl.textContent = e.message;
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Subir y publicar';
+  }
 }
 
 async function copyRustdeskKey() {

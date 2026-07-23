@@ -1,8 +1,19 @@
 const express = require('express');
 const db = require('../db/adminDb');
 const rustdeskKey = require('../rustdeskKey');
+const clientDownload = require('../clientDownload');
 
 const router = express.Router();
+
+router.get('/client-download/status', (req, res) => {
+  res.set('Cache-Control', 'no-store').json(clientDownload.getClientInfo());
+});
+
+router.get('/client-download', (req, res) => {
+  const info = clientDownload.getClientInfo();
+  if (!info.available) return res.status(404).json({ error: 'El cliente aun no esta disponible' });
+  res.download(clientDownload.clientPath, 'sehcontrol.exe');
+});
 
 router.get('/server-key', (req, res) => {
   try {

@@ -9,6 +9,7 @@ const { formatCurrency } = require('../format');
 const { requireAuth, requireAdmin, hashPassword } = require('../auth');
 const rustdeskKey = require('../rustdeskKey');
 const { pushToAll } = require('../ws');
+const clientDownload = require('../clientDownload');
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -60,6 +61,32 @@ router.post('/settings/rustdesk-key/rotate', (req, res) => {
     res.json({ ...serverKey, restarting: true, notified_clients: notifiedClients });
   } catch (e) {
     res.status(500).json({ error: `No se pudo rotar la key: ${e.message}` });
+  }
+});
+
+router.get('/settings/client-download', (req, res) => {
+  res.json(clientDownload.getClientInfo());
+});
+
+const maxClientSizeMb = Number(process.env.CLIENT_EXE_MAX_MB || 500);
+const clientUpload = express.raw({
+  type: ['application/octet-stream', 'application/x-msdownload', 'application/vnd.microsoft.portable-executable'],
+  limit: `${maxClientSizeMb}mb`,
+});
+
+router.put('/settings/client-download', clientUpload, (req, res) => {
+  try {
+    const info = clientDownload.saveClient(req.body);
+    notifications.logActivity(
+      req.user.sub,
+      'client_exe_uploaded',
+      'platform_settings',
+      1,
+      `${info.filename} (${info.size_bytes} bytes)`,
+    );
+    res.json(info);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
   }
 });
 
