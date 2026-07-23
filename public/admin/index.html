@@ -100,7 +100,7 @@ async function renderPlans() {
   const main = document.getElementById('main');
   main.innerHTML = `
     <div class="toolbar"><h1>Membresias / Planes</h1><button onclick="openPlanModal()">+ Nuevo plan</button></div>
-    <table><thead><tr><th>Nombre</th><th>Limite equipos</th><th>Precio</th><th>Duracion</th><th></th></tr></thead>
+    <table><thead><tr><th>Nombre</th><th>Limite equipos</th><th>Precio</th><th>Duracion</th><th>Publico</th><th></th></tr></thead>
     <tbody id="plansBody"></tbody></table>
   `;
   await loadPlans();
@@ -111,11 +111,30 @@ async function renderPlans() {
       <td>${p.max_devices}</td>
       <td>${(p.price_cents / 100).toFixed(2)} ${p.currency || 'USD'}</td>
       <td>${p.duration_days} dias</td>
+      <td>
+        <label class="switch" title="${p.is_public ? 'Visible en la pagina publica' : 'Oculto en la pagina publica'}">
+          <input type="checkbox" ${p.is_public ? 'checked' : ''} onchange="setPlanVisibility(${p.id}, this)">
+          <span></span>
+        </label>
+      </td>
       <td class="row-actions">
         <button class="secondary" onclick='openPlanModal(${JSON.stringify(p)})'>Editar</button>
         <button class="danger" onclick="deletePlan(${p.id})">Borrar</button>
       </td>
-    </tr>`).join('') : '<tr><td colspan="5" class="empty">Sin planes todavia</td></tr>';
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">Sin planes todavia</td></tr>';
+}
+
+async function setPlanVisibility(id, input) {
+  input.disabled = true;
+  try {
+    await api(`/api/admin/plans/${id}`, { method: 'PUT', body: { is_public: input.checked } });
+    await loadPlans();
+  } catch (e) {
+    input.checked = !input.checked;
+    alert(e.message);
+  } finally {
+    input.disabled = false;
+  }
 }
 
 function openPlanModal(plan) {
@@ -136,6 +155,10 @@ function openPlanModal(plan) {
         </select>
       </div>
       <label>Duracion (dias)</label><input name="duration_days" type="number" min="1" required value="${isEdit ? plan.duration_days : 30}">
+      <label class="check-label">
+        <input name="is_public" type="checkbox" ${isEdit ? (plan.is_public ? 'checked' : '') : 'checked'}>
+        Mostrar este plan en la pagina publica
+      </label>
       <div class="error" id="modalErr"></div>
       <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
         <button type="button" class="secondary" onclick="closeModal()">Cancelar</button>
@@ -152,6 +175,7 @@ function openPlanModal(plan) {
       price_cents: Math.round(Number(f.price.value) * 100),
       currency: f.currency.value,
       duration_days: Number(f.duration_days.value),
+      is_public: f.is_public.checked,
     };
     try {
       if (isEdit) await api(`/api/admin/plans/${plan.id}`, { method: 'PUT', body: payload });
@@ -570,6 +594,8 @@ async function renderSettings() {
         <label>CUIT / RFC / identificacion fiscal (opcional)</label><input name="tax_id">
         <label>Direccion (opcional)</label><input name="address">
         <label>Telefono (opcional)</label><input name="phone">
+        <label>WhatsApp para ventas (codigo de pais + numero)</label>
+        <input name="whatsapp_number" inputmode="tel" placeholder="ej. 51987654321">
         <label>Email de contacto (opcional)</label><input name="contact_email" type="email">
         <div style="display:flex;gap:8px;">
           <div style="flex:1;">
@@ -613,6 +639,7 @@ async function renderSettings() {
     pf.tax_id.value = settings.tax_id || '';
     pf.address.value = settings.address || '';
     pf.phone.value = settings.phone || '';
+    pf.whatsapp_number.value = settings.whatsapp_number || '';
     pf.contact_email.value = settings.contact_email || '';
     pf.default_currency.value = settings.default_currency || 'USD';
     pf.language.value = settings.language || 'es';
@@ -635,6 +662,7 @@ async function renderSettings() {
           tax_id: f.tax_id.value,
           address: f.address.value,
           phone: f.phone.value,
+          whatsapp_number: f.whatsapp_number.value,
           contact_email: f.contact_email.value,
           default_currency: f.default_currency.value,
           language: f.language.value,

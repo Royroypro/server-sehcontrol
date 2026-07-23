@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS plans (
   price_cents INT NOT NULL DEFAULT 0,
   currency VARCHAR(10) NOT NULL DEFAULT 'USD',
   duration_days INT NOT NULL DEFAULT 30,
+  is_public BOOLEAN NOT NULL DEFAULT FALSE,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uq_plans_name (name)
@@ -119,6 +120,7 @@ CREATE TABLE IF NOT EXISTS platform_settings (
   tax_id VARCHAR(50),
   address VARCHAR(300),
   phone VARCHAR(50),
+  whatsapp_number VARCHAR(50),
   contact_email VARCHAR(200),
   default_currency VARCHAR(10) NOT NULL DEFAULT 'USD',
   language VARCHAR(10) NOT NULL DEFAULT 'es',

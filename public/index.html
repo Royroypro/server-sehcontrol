@@ -23,9 +23,10 @@
         <p class="eyebrow">CONTROL REMOTO</p>
         <h1>Sehcontrol</h1>
         <p class="lead">Accede a tus equipos autorizados y administra tu membresia desde una plataforma centralizada.</p>
+        <p class="account-note">El inicio de sesion es para clientes que ya tienen una cuenta activa.</p>
         <div class="actions">
           <a class="button" href="/login.html">Entrar a mi cuenta</a>
-          <a class="text-link" href="/mas-informacion">Conocer la plataforma</a>
+          <a class="text-link whatsapp-link" href="#" hidden>Solicitar una cuenta por WhatsApp</a>
         </div>
       </div>
       <div class="status-panel" aria-label="Servicios disponibles">
@@ -34,6 +35,23 @@
           <strong>Servicio disponible</strong>
           <p>Panel, servidor ID y relay integrados.</p>
         </div>
+      </div>
+    </section>
+
+    <section class="plans-section" id="planes">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">MEMBRESIAS</p>
+          <h2>Elige un plan</h2>
+        </div>
+        <p>Si todavia no tienes una cuenta, solicita el plan por WhatsApp. Nuestro equipo creara tu acceso despues de coordinar la activacion.</p>
+      </div>
+      <div class="plans-grid" id="publicPlans">
+        <p class="plans-loading">Cargando planes disponibles...</p>
+      </div>
+      <div class="sales-contact" id="salesContact" hidden>
+        <span>Atencion para nuevos clientes</span>
+        <a class="whatsapp-link" href="#" target="_blank" rel="noopener"></a>
       </div>
     </section>
 
@@ -64,5 +82,71 @@
       <a href="/privacy.html">Privacidad</a>
     </nav>
   </footer>
+  <script>
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
+      })[char]);
+    }
+
+    function formatPlanPrice(plan) {
+      return new Intl.NumberFormat('es-PE', {
+        style: 'currency',
+        currency: plan.currency || 'USD',
+      }).format(plan.price_cents / 100);
+    }
+
+    function whatsappUrl(number, plan) {
+      const digits = String(number || '').replace(/\D/g, '');
+      if (!digits) return null;
+      const detail = plan
+        ? `Hola, quiero solicitar el plan ${plan.name} (${formatPlanPrice(plan)}, ${plan.duration_days} dias).`
+        : 'Hola, quiero informacion para crear una cuenta en Sehcontrol.';
+      return `https://wa.me/${digits}?text=${encodeURIComponent(detail)}`;
+    }
+
+    async function loadPublicPlans() {
+      const plansEl = document.getElementById('publicPlans');
+      try {
+        const data = await fetch('/api/public/plans').then((res) => {
+          if (!res.ok) throw new Error('No se pudieron cargar los planes');
+          return res.json();
+        });
+        const number = data.whatsapp_number;
+        const generalUrl = whatsappUrl(number);
+
+        document.querySelectorAll('.whatsapp-link').forEach((link) => {
+          if (!generalUrl) return;
+          link.hidden = false;
+          link.href = generalUrl;
+          if (link.closest('#salesContact')) link.textContent = `WhatsApp: ${number}`;
+        });
+        if (generalUrl) document.getElementById('salesContact').hidden = false;
+
+        if (!data.plans.length) {
+          plansEl.innerHTML = '<p class="plans-loading">No hay planes publicos disponibles en este momento.</p>';
+          return;
+        }
+        plansEl.innerHTML = data.plans.map((plan) => {
+          const url = whatsappUrl(number, plan);
+          return `
+            <article class="plan-item">
+              <div>
+                <p class="plan-name">${escapeHtml(plan.name)}</p>
+                <p class="plan-price">${escapeHtml(formatPlanPrice(plan))}</p>
+                <p class="plan-detail">Hasta ${plan.max_devices} equipo${plan.max_devices === 1 ? '' : 's'} | ${plan.duration_days} dias</p>
+              </div>
+              ${url
+                ? `<a class="button whatsapp-button" href="${url}" target="_blank" rel="noopener">Solicitar por WhatsApp</a>`
+                : '<span class="contact-unavailable">Contacto no configurado</span>'}
+            </article>`;
+        }).join('');
+      } catch (error) {
+        plansEl.innerHTML = `<p class="plans-loading">${escapeHtml(error.message)}</p>`;
+      }
+    }
+
+    loadPublicPlans();
+  </script>
 </body>
 </html>

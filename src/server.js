@@ -10,6 +10,7 @@ const adminRoutes = require('./routes/admin');
 const clientRoutes = require('./routes/client');
 const hbbsHttpRoutes = require('./routes/hbbsHttp');
 const clientExtensionsRoutes = require('./routes/clientExtensions');
+const publicRoutes = require('./routes/public');
 const { initWebSocketServer } = require('./ws');
 
 const app = express();
@@ -28,6 +29,11 @@ app.get('/mas-informacion', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'mas-informacion.html'));
 });
 
+app.get('/index', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
+
+app.use('/api/public', publicRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/client', clientRoutes);

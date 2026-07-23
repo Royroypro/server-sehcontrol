@@ -17,6 +17,7 @@ db.exec(`
     price_cents integer not null default 0,
     currency varchar(10) not null default 'USD',
     duration_days integer not null default 30,
+    is_public tinyint not null default 0,
     created_at datetime not null default (current_timestamp)
   );
 
@@ -123,6 +124,7 @@ db.exec(`
     tax_id varchar(50),
     address varchar(300),
     phone varchar(50),
+    whatsapp_number varchar(50),
     contact_email varchar(200),
     default_currency varchar(10) not null default 'USD',
     language varchar(10) not null default 'es',
@@ -142,12 +144,19 @@ function addColumnIfMissing(table, column, definition) {
   const cols = db.prepare(`pragma table_info(${table})`).all().map((c) => c.name);
   if (!cols.includes(column)) {
     db.exec(`alter table ${table} add column ${column} ${definition}`);
+    return true;
   }
+  return false;
 }
 addColumnIfMissing('plans', 'currency', "varchar(10) not null default 'USD'");
+const addedPlanVisibility = addColumnIfMissing('plans', 'is_public', 'tinyint not null default 0');
+if (addedPlanVisibility) {
+  db.prepare("update plans set is_public = 1 where name in ('Free', 'Pro', 'Enterprise')").run();
+}
 addColumnIfMissing('users', 'name', 'varchar(150)');
 addColumnIfMissing('payments', 'status', "varchar(20) not null default 'paid'");
 addColumnIfMissing('payments', 'receipt_number', 'integer');
+addColumnIfMissing('platform_settings', 'whatsapp_number', 'varchar(50)');
 // Tags de la libreta de direcciones "legacy" (categorias "Cabinas"/"Clientes"
 // que pide el cliente). JSON array de strings, ej. '["Cabinas"]'.
 addColumnIfMissing('devices', 'tags', "text not null default '[]'");

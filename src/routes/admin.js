@@ -17,11 +17,11 @@ router.get('/settings', (req, res) => {
 });
 
 router.put('/settings', (req, res) => {
-  const { business_name, tax_id, address, phone, contact_email, default_currency, language } = req.body || {};
+  const { business_name, tax_id, address, phone, whatsapp_number, contact_email, default_currency, language } = req.body || {};
   const current = db.prepare('select * from platform_settings where id = 1').get();
   db.prepare(`
     update platform_settings set
-      business_name = ?, tax_id = ?, address = ?, phone = ?, contact_email = ?,
+      business_name = ?, tax_id = ?, address = ?, phone = ?, whatsapp_number = ?, contact_email = ?,
       default_currency = ?, language = ?, updated_at = datetime('now')
     where id = 1
   `).run(
@@ -29,6 +29,7 @@ router.put('/settings', (req, res) => {
     tax_id ?? current.tax_id,
     address ?? current.address,
     phone ?? current.phone,
+    whatsapp_number ?? current.whatsapp_number,
     contact_email ?? current.contact_email,
     default_currency || current.default_currency,
     language || current.language,
@@ -89,14 +90,14 @@ router.get('/plans', (req, res) => {
 });
 
 router.post('/plans', (req, res) => {
-  const { name, max_devices, price_cents, currency, duration_days } = req.body || {};
+  const { name, max_devices, price_cents, currency, duration_days, is_public } = req.body || {};
   if (!name || max_devices == null) {
     return res.status(400).json({ error: 'name y max_devices son requeridos' });
   }
   try {
     const info = db.prepare(
-      'insert into plans (name, max_devices, price_cents, currency, duration_days) values (?, ?, ?, ?, ?)'
-    ).run(name, Number(max_devices), Number(price_cents) || 0, currency || 'USD', Number(duration_days) || 30);
+      'insert into plans (name, max_devices, price_cents, currency, duration_days, is_public) values (?, ?, ?, ?, ?, ?)'
+    ).run(name, Number(max_devices), Number(price_cents) || 0, currency || 'USD', Number(duration_days) || 30, is_public ? 1 : 0);
     notifications.logActivity(req.user.sub, 'plan_created', 'plan', info.lastInsertRowid, name);
     res.status(201).json(db.prepare('select * from plans where id = ?').get(info.lastInsertRowid));
   } catch (e) {
@@ -107,15 +108,16 @@ router.post('/plans', (req, res) => {
 router.put('/plans/:id', (req, res) => {
   const plan = db.prepare('select * from plans where id = ?').get(req.params.id);
   if (!plan) return res.status(404).json({ error: 'Plan no encontrado' });
-  const { name, max_devices, price_cents, currency, duration_days } = req.body || {};
+  const { name, max_devices, price_cents, currency, duration_days, is_public } = req.body || {};
   db.prepare(
-    'update plans set name = ?, max_devices = ?, price_cents = ?, currency = ?, duration_days = ? where id = ?'
+    'update plans set name = ?, max_devices = ?, price_cents = ?, currency = ?, duration_days = ?, is_public = ? where id = ?'
   ).run(
     name ?? plan.name,
     max_devices != null ? Number(max_devices) : plan.max_devices,
     price_cents != null ? Number(price_cents) : plan.price_cents,
     currency || plan.currency,
     duration_days != null ? Number(duration_days) : plan.duration_days,
+    is_public !== undefined ? (is_public ? 1 : 0) : plan.is_public,
     plan.id
   );
   res.json(db.prepare('select * from plans where id = ?').get(plan.id));

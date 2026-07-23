@@ -11,7 +11,7 @@ const plans = [
 for (const p of plans) {
   const exists = db.prepare('select 1 from plans where name = ?').get(p.name);
   if (!exists) {
-    db.prepare('insert into plans (name, max_devices, price_cents, duration_days) values (?, ?, ?, ?)')
+    db.prepare('insert into plans (name, max_devices, price_cents, duration_days, is_public) values (?, ?, ?, ?, 1)')
       .run(p.name, p.max_devices, p.price_cents, p.duration_days);
     console.log(`Plan creado: ${p.name}`);
   }
