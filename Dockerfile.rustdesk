@@ -28,7 +28,10 @@ RUN apt-get update \
 
 COPY --from=builder /build/rustdesk-server/target/release/hbbs /usr/local/bin/hbbs
 COPY --from=builder /build/rustdesk-server/target/release/hbbr /usr/local/bin/hbbr
+COPY scripts/rustdesk-entrypoint.sh /usr/local/bin/rustdesk-entrypoint
+RUN chmod 755 /usr/local/bin/rustdesk-entrypoint
 
 WORKDIR /root
+ENTRYPOINT ["/usr/local/bin/rustdesk-entrypoint"]
 VOLUME ["/root"]
 EXPOSE 21115 21116 21116/udp 21117 21118 21119

@@ -42,6 +42,7 @@ services:
       PORT: "${PORT:-8899}"
       ADMIN_DB_PATH: /app/data/admin.sqlite3
       HBBS_DB_PATH: /rustdesk/db_v2.sqlite3
+      RUSTDESK_DATA_PATH: /rustdesk
     volumes:
       - ./data:/app/data
       - ./rustdesk-data:/rustdesk

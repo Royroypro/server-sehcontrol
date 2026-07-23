@@ -7,6 +7,7 @@ const notifications = require('../notifications');
 const { buildReceiptPdf } = require('../receipt');
 const { formatCurrency } = require('../format');
 const { requireAuth, requireAdmin, hashPassword } = require('../auth');
+const rustdeskKey = require('../rustdeskKey');
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -36,6 +37,27 @@ router.put('/settings', (req, res) => {
   );
   notifications.logActivity(req.user.sub, 'settings_updated', 'platform_settings', 1, business_name || null);
   res.json(db.prepare('select * from platform_settings where id = 1').get());
+});
+
+router.get('/settings/rustdesk-key', (req, res) => {
+  try {
+    res.json({ public_key: rustdeskKey.readPublicKey() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/settings/rustdesk-key/rotate', (req, res) => {
+  if (req.body?.confirm !== true) {
+    return res.status(400).json({ error: 'Debes confirmar la rotacion de la key' });
+  }
+  try {
+    const publicKey = rustdeskKey.rotateKeyPair();
+    notifications.logActivity(req.user.sub, 'rustdesk_key_rotated', 'platform_settings', 1, 'Key publica de RustDesk rotada');
+    res.json({ public_key: publicKey, restarting: true });
+  } catch (e) {
+    res.status(500).json({ error: `No se pudo rotar la key: ${e.message}` });
+  }
 });
 
 // ---------- Dashboard ----------

@@ -622,6 +622,22 @@ async function renderSettings() {
       </form>
     </div>
 
+    <div class="card" style="max-width:520px;margin-bottom:20px;">
+      <h2 style="font-size:15px;margin-top:0;">Key de RustDesk</h2>
+      <p class="settings-help">Esta es la key publica que deben usar los clientes para conectarse a este servidor.</p>
+      <label>Key publica actual</label>
+      <div style="display:flex;gap:8px;">
+        <input id="rustdeskPublicKey" readonly style="flex:1;font-family:monospace;">
+        <button type="button" class="secondary" onclick="copyRustdeskKey()">Copiar</button>
+      </div>
+      <div class="danger-note">
+        Cambiar la key desconectara a los clientes que todavia tengan la anterior. Tendras que configurar la nueva key en todos ellos.
+      </div>
+      <div class="error" id="keyErr"></div>
+      <div class="msg-ok" id="keyOk" style="display:none;"></div>
+      <button type="button" class="danger" style="margin-top:12px;" onclick="rotateRustdeskKey()">Generar nueva key</button>
+    </div>
+
     <div class="card" style="max-width:520px;">
       <h2 style="font-size:15px;margin-top:0;">Mi cuenta</h2>
       <form id="profileForm">
@@ -679,6 +695,13 @@ async function renderSettings() {
   });
 
   try {
+    const keyInfo = await api('/api/admin/settings/rustdesk-key');
+    document.getElementById('rustdeskPublicKey').value = keyInfo.public_key || 'No disponible';
+  } catch (e) {
+    document.getElementById('keyErr').textContent = e.message;
+  }
+
+  try {
     const { user } = await api('/api/auth/me');
     const prf = document.getElementById('profileForm');
     prf.name.value = user.name || '';
@@ -710,6 +733,42 @@ async function renderSettings() {
       errEl.textContent = err.message;
     }
   });
+}
+
+async function copyRustdeskKey() {
+  const input = document.getElementById('rustdeskPublicKey');
+  try {
+    await navigator.clipboard.writeText(input.value);
+  } catch (_) {
+    input.select();
+    document.execCommand('copy');
+  }
+  const okEl = document.getElementById('keyOk');
+  okEl.textContent = 'Key copiada.';
+  okEl.style.display = 'block';
+}
+
+async function rotateRustdeskKey() {
+  const warning = 'Esta accion cambiara la key del servidor. Los clientes con la key anterior dejaran de conectar hasta que los actualices. ¿Generar una nueva key?';
+  if (!confirm(warning)) return;
+  const secondConfirmation = prompt('Escribe CAMBIAR KEY para confirmar:');
+  if (secondConfirmation !== 'CAMBIAR KEY') return;
+
+  const errEl = document.getElementById('keyErr');
+  const okEl = document.getElementById('keyOk');
+  errEl.textContent = '';
+  okEl.style.display = 'none';
+  try {
+    const result = await api('/api/admin/settings/rustdesk-key/rotate', {
+      method: 'POST',
+      body: { confirm: true },
+    });
+    document.getElementById('rustdeskPublicKey').value = result.public_key;
+    okEl.textContent = 'Nueva key generada. hbbs y hbbr se estan reiniciando.';
+    okEl.style.display = 'block';
+  } catch (e) {
+    errEl.textContent = e.message;
+  }
 }
 
 loadSettings();

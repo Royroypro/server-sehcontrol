@@ -155,3 +155,12 @@ tr:last-child td { border-bottom: none; }
 .switch input:disabled + span { cursor: wait; opacity: 0.6; }
 .check-label { display: flex; align-items: center; gap: 8px; color: var(--text); }
 .check-label input { width: auto; margin: 0; }
+.settings-help { margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+.danger-note {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--danger);
+  background: rgba(214,69,69,0.08);
+  color: var(--text);
+  font-size: 12px;
+}
