@@ -20,6 +20,14 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/ayuda', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'ayuda.html'));
+});
+
+app.get('/mas-informacion', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'mas-informacion.html'));
+});
+
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/client', clientRoutes);
