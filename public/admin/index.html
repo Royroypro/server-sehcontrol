@@ -208,7 +208,7 @@ function openUserModal(user) {
     <form class="card modal">
       <h2>${isEdit ? 'Editar usuario' : 'Nuevo usuario'}</h2>
       <label>Nombre</label><input name="name" value="${isEdit ? (user.name || '') : ''}" placeholder="ej. Juan Perez">
-      <label>Email</label><input name="email" type="email" required value="${isEdit ? user.email : ''}" ${isEdit ? 'readonly' : ''}>
+      <label>Email</label><input name="email" type="email" required value="${isEdit ? user.email : ''}">
       <label>${isEdit ? 'Nueva contrasena (opcional)' : 'Contrasena'}</label>
       <input name="password" type="password" ${isEdit ? '' : 'required'}>
       <label>Rol</label>
@@ -243,6 +243,7 @@ function openUserModal(user) {
           method: 'PUT',
           body: {
             name: f.name.value,
+            email: f.email.value,
             role: f.role.value,
             status: f.status.value,
             plan_id: f.plan_id.value || null,

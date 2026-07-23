@@ -173,10 +173,14 @@ router.post('/users', (req, res) => {
 router.put('/users/:id', (req, res) => {
   const user = db.prepare('select * from users where id = ?').get(req.params.id);
   if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-  const { name, role, status, plan_id, plan_expires_at, plan_started_at, password, renew } = req.body || {};
+  const { email, name, role, status, plan_id, plan_expires_at, plan_started_at, password, renew } = req.body || {};
 
   if (role && !['admin', 'client'].includes(role)) return res.status(400).json({ error: 'role invalido' });
   if (status && !['active', 'suspended'].includes(status)) return res.status(400).json({ error: 'status invalido' });
+  const newEmail = email !== undefined ? String(email).toLowerCase().trim() : user.email;
+  if (!newEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+    return res.status(400).json({ error: 'Email invalido' });
+  }
 
   let newPlanId = plan_id !== undefined ? plan_id : user.plan_id;
   let newExpiresAt = plan_expires_at !== undefined ? plan_expires_at : user.plan_expires_at;
@@ -192,15 +196,19 @@ router.put('/users/:id', (req, res) => {
 
   const newHash = password ? hashPassword(password) : user.password_hash;
 
-  db.prepare(`
-    update users set name = ?, role = ?, status = ?, plan_id = ?, plan_started_at = ?, plan_expires_at = ?, password_hash = ?
-    where id = ?
-  `).run(name !== undefined ? name : user.name, role || user.role, status || user.status, newPlanId || null, newStartedAt, newExpiresAt, newHash, user.id);
+  try {
+    db.prepare(`
+      update users set email = ?, name = ?, role = ?, status = ?, plan_id = ?, plan_started_at = ?, plan_expires_at = ?, password_hash = ?
+      where id = ?
+    `).run(newEmail, name !== undefined ? name : user.name, role || user.role, status || user.status, newPlanId || null, newStartedAt, newExpiresAt, newHash, user.id);
+  } catch (e) {
+    return res.status(400).json({ error: e.message.includes('UNIQUE') ? 'Ya existe un usuario con ese email' : e.message });
+  }
 
   membershipSync.syncUserDevices(user.id);
   notifications.logActivity(req.user.sub, 'user_updated', 'user', user.id,
-    `role=${role || user.role} status=${status || user.status}${renew ? ' (renovado)' : ''}`);
-  res.json(db.prepare('select id, email, role, status, plan_id, plan_expires_at from users where id = ?').get(user.id));
+    `email=${user.email}->${newEmail} role=${role || user.role} status=${status || user.status}${renew ? ' (renovado)' : ''}`);
+  res.json(db.prepare('select id, email, name, role, status, plan_id, plan_started_at, plan_expires_at from users where id = ?').get(user.id));
 });
 
 router.delete('/users/:id', (req, res) => {
