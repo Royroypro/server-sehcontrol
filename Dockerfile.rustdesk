@@ -1,0 +1,34 @@
+FROM rust:1.88-bookworm AS builder
+
+ARG RUSTDESK_SERVER_COMMIT=70dcfdeb95ccd848ff5dc64df69ff2da4131c5a8
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       clang cmake git libclang-dev libsodium-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build/rustdesk-server
+
+RUN git init \
+    && git remote add origin https://github.com/rustdesk/rustdesk-server.git \
+    && git fetch --depth 1 origin "${RUSTDESK_SERVER_COMMIT}" \
+    && git checkout --detach FETCH_HEAD \
+    && git submodule update --init --recursive --depth 1
+
+COPY patches/rustdesk-membership.patch /tmp/rustdesk-membership.patch
+RUN git apply --check /tmp/rustdesk-membership.patch \
+    && git apply /tmp/rustdesk-membership.patch \
+    && cargo build --release --locked --bin hbbs --bin hbbr
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libsodium23 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/rustdesk-server/target/release/hbbs /usr/local/bin/hbbs
+COPY --from=builder /build/rustdesk-server/target/release/hbbr /usr/local/bin/hbbr
+
+WORKDIR /root
+VOLUME ["/root"]
+EXPOSE 21115 21116 21116/udp 21117 21118 21119

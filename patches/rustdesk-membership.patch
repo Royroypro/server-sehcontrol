@@ -1,0 +1,41 @@
+diff --git a/src/database.rs b/src/database.rs
+index fa1b6ed..e1bdd15 100644
+--- a/src/database.rs
++++ b/src/database.rs
+@@ -103,6 +103,15 @@ impl Database {
+         .await?)
+     }
+ 
++    // status = Some(0) means an external membership system disabled this ID.
++    // Query without caching so membership changes take effect immediately.
++    pub async fn is_peer_disabled(&self, id: &str) -> ResultType<bool> {
++        let row = sqlx::query!("select status from peer where id = ?", id)
++            .fetch_optional(self.pool.get().await?.deref_mut())
++            .await?;
++        Ok(matches!(row.and_then(|r| r.status), Some(0)))
++    }
++
+     pub async fn insert_peer(
+         &self,
+         id: &str,
+diff --git a/src/rendezvous_server.rs b/src/rendezvous_server.rs
+index 4c782d4..a9403d7 100644
+--- a/src/rendezvous_server.rs
++++ b/src/rendezvous_server.rs
+@@ -689,6 +689,16 @@ impl RendezvousServer {
+             return Ok((msg_out, None));
+         }
+         let id = ph.id;
++        if self.pm.db.is_peer_disabled(&id).await.unwrap_or(false) {
++            log::warn!("Rejected punch hole request for disabled id {}", id);
++            let mut msg_out = RendezvousMessage::new();
++            msg_out.set_punch_hole_response(PunchHoleResponse {
++                other_failure: "Membership suspended or expired. Contact your administrator."
++                    .to_owned(),
++                ..Default::default()
++            });
++            return Ok((msg_out, None));
++        }
+         // punch hole request from A, relay to B,
+         // check if in same intranet first,
+         // fetch local addrs if in same intranet.

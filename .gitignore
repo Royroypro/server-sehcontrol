@@ -1,4 +1,6 @@
 node_modules/
 data/
+rustdesk-data/
+backups/
 .env
 *.log

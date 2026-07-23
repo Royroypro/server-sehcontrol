@@ -1,0 +1,7 @@
+.git
+.env
+backups
+data
+node_modules
+rustdesk-data
+npm-debug.log*
