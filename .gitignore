@@ -5,3 +5,5 @@ backups/
 .env
 *.log
 dist/
+*.tar.gz
+public/client/sehcontrol.exe

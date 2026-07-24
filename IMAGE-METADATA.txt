@@ -1,0 +1,12 @@
+Sehcontrol production build 2026.07.23.1
+Platform: linux/amd64
+
+Image: sehcontrol-panel:2026.07.23.1-amd64
+Docker image ID: sha256:bd0f218fec1da5046e058d8cd0e790eae7e2fed71a9cda202befbbec57b9f9cc
+Uncompressed size: 100889646 bytes
+
+Image: sehcontrol-rustdesk-server:1.1.16-membership-amd64
+Docker image ID: sha256:5989daf72f4c0883927f47f4f9ec4463d19ec84d8726d31d2ab9391574981ed2
+Uncompressed size: 37637135 bytes
+
+Archive SHA-256 values are stored in SHA256SUMS inside the release package.

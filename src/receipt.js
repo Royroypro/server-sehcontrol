@@ -31,7 +31,7 @@ const LABELS = {
     devicesTitle: 'Equipos que abarca',
     noDevices: 'Sin equipos asignados a esta cuenta',
     deviceIdCol: 'ID Sehcontrol',
-    deviceAliasCol: 'Alias',
+    deviceAliasCol: 'Alias del equipo',
   },
   en: {
     title: 'PAYMENT RECEIPT',
@@ -168,7 +168,7 @@ function buildReceiptPdf({ payment, user, devices = [], settings }) {
         const y = tableTop + 20 + i * 18;
         if (y > 760) { doc.addPage(); }
         doc.text(d.rustdesk_id, 50, y, { width: idColWidth });
-        doc.text(d.alias || '-', 50 + idColWidth, y, { width: 300 });
+        doc.text(d.alias || d.hostname || '-', 50 + idColWidth, y, { width: 300 });
       });
       doc.y = tableTop + 20 + devices.length * 18 + 10;
     }

@@ -429,7 +429,13 @@ router.get('/payments/:id/receipt', async (req, res) => {
     select u.*, p.name as plan_name, p.max_devices, p.duration_days as plan_duration_days
     from users u left join plans p on p.id = u.plan_id where u.id = ?
   `).get(payment.user_id);
-  const devices = db.prepare('select rustdesk_id, alias from devices where owner_user_id = ? order by claimed_at asc').all(payment.user_id);
+  const devices = db.prepare(`
+    select d.rustdesk_id, d.alias, s.hostname
+    from devices d
+    left join device_sysinfo s on s.rustdesk_id = d.rustdesk_id
+    where d.owner_user_id = ?
+    order by d.claimed_at asc
+  `).all(payment.user_id);
   const settings = db.prepare('select * from platform_settings where id = 1').get();
   try {
     const pdf = await buildReceiptPdf({ payment, user, devices, settings });

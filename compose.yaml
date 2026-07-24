@@ -1,11 +1,6 @@
 services:
   hbbr:
-    build:
-      context: .
-      dockerfile: Dockerfile.rustdesk
-      args:
-        RUSTDESK_SERVER_COMMIT: "${RUSTDESK_SERVER_COMMIT:-70dcfdeb95ccd848ff5dc64df69ff2da4131c5a8}"
-    image: sehcontrol-rustdesk-server:1.1.16-membership
+    image: sehcontrol-rustdesk-server:1.1.16-membership-amd64
     container_name: sehcontrol-hbbr
     command: hbbr
     network_mode: host
@@ -14,9 +9,9 @@ services:
       - ./rustdesk-data:/root
 
   hbbs:
-    image: sehcontrol-rustdesk-server:1.1.16-membership
+    image: sehcontrol-rustdesk-server:1.1.16-membership-amd64
     container_name: sehcontrol-hbbs
-    command: hbbs -r ${RUSTDESK_RELAY_HOST:-192.168.0.4}:21117
+    command: hbbs -r sehcontrol.sehuacho.com:21117
     network_mode: host
     restart: unless-stopped
     depends_on:
@@ -25,11 +20,8 @@ services:
       - ./rustdesk-data:/root
 
   panel:
-    build:
-      context: .
-    image: sehcontrol-panel:latest
+    image: sehcontrol-panel:2026.07.23.2-local
     container_name: sehcontrol-panel
-    # Necesita escribir la base compartida de hbbs para aplicar suspensiones.
     user: "0:0"
     command: ["sh", "-c", "npm run seed && exec npm start"]
     network_mode: host
@@ -39,43 +31,20 @@ services:
     env_file:
       - .env
     environment:
-      PORT: "${PORT:-8899}"
       ADMIN_DB_PATH: /app/data/admin.sqlite3
       HBBS_DB_PATH: /rustdesk/db_v2.sqlite3
       RUSTDESK_DATA_PATH: /rustdesk
     volumes:
       - ./data:/app/data
+      - ./public/client:/app/data/downloads
       - ./rustdesk-data:/rustdesk
     healthcheck:
       test:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:${PORT:-8899}/health').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
+        - "fetch('http://127.0.0.1:8899/health').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 15s
-
-  mysql:
-    image: mysql:8.4
-    container_name: sehcontrol-mysql
-    profiles:
-      - mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: sehcontrol
-      MYSQL_USER: sehcontrol
-      MYSQL_PASSWORD: "${MYSQL_PASSWORD:-change-before-enabling-mysql}"
-      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-change-before-enabling-mysql-root}"
-    volumes:
-      - mysql-data:/var/lib/mysql
-      - ./database/mysql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$${MYSQL_ROOT_PASSWORD}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-volumes:
-  mysql-data:
