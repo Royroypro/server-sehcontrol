@@ -48,6 +48,10 @@ RustDesk para Linux. Deben estar permitidos:
 - UDP `21116`.
 - TCP `8899` para el panel.
 
+Para evitar que un cliente transfiriendo archivos pesados sature el enlace
+en perjuicio de los demas, ver
+[`docs/BANDWIDTH_LIMIT.md`](docs/BANDWIDTH_LIMIT.md).
+
 ## Importar una instalacion existente
 
 Deten primero los procesos o contenedores antiguos de `hbbs` y `hbbr` para que
@@ -79,3 +83,10 @@ docker compose up -d --build
 
 La preparacion para MySQL esta explicada en
 `docs/MYSQL_MIGRATION.md`. MySQL no se inicia ni se usa por defecto.
+
+## Produccion
+
+`production/README.md` cubre el despliegue del paquete ya compilado en
+`sehcontrol.sehuacho.com`. Para generar ese paquete a partir del codigo
+fuente (compilar las imagenes, empaquetarlas y firmarlas), ver
+[`docs/BUILD_PRODUCTION.md`](docs/BUILD_PRODUCTION.md).

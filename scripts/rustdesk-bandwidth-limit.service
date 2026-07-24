@@ -1,0 +1,19 @@
+[Unit]
+Description=Limite de ancho de banda para el relay de RustDesk (Sehcontrol)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Ajusta esta ruta si el repo esta en otra ubicacion.
+ExecStart=/home/server3/rustdesk-admin-panel/scripts/rustdesk-bandwidth-limit.sh start
+ExecStop=/home/server3/rustdesk-admin-panel/scripts/rustdesk-bandwidth-limit.sh stop
+# Ajusta estos valores a la capacidad real del enlace antes de habilitar.
+# Environment=RELAY_UP_MBIT=25
+# Environment=RELAY_DOWN_MBIT=10
+# Environment=LINK_UP_MBIT=40
+# Environment=LINK_DOWN_MBIT=20
+
+[Install]
+WantedBy=multi-user.target
