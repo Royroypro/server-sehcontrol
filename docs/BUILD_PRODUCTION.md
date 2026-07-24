@@ -98,6 +98,23 @@ docker save "$RUSTDESK_IMAGE" | gzip > "$OUTDIR/sehcontrol-rustdesk-server-${RUS
 Mismo formato que ya trae el paquete actual (ver `IMAGE-METADATA.txt` en
 la raiz del repo como referencia).
 
+**Cuidado:** si se compila con buildx (el `docker build` por defecto en
+Docker moderno), el `Id` que devuelve `docker image inspect` en la maquina
+de build puede ser el digest del *manifest list* (con provenance/
+attestations), no el de la imagen que va a quedar cargada del otro lado
+tras `docker save | gzip | docker load`. Verificalo con un round-trip
+local antes de confiar en el valor:
+
+```bash
+docker save "$PANEL_IMAGE" | docker load
+docker image inspect "$PANEL_IMAGE" --format '{{.Id}}'
+```
+
+Si ese `Id` no coincide con el que uses en `IMAGE-METADATA.txt`, usa el
+del round-trip: es el que va a ver quien cargue el paquete en otro host.
+La integridad real del archivo la garantiza igual `SHA256SUMS` (hash del
+`.tar.gz`), este campo es solo informativo.
+
 ## 7. Actualizar y copiar la configuracion de despliegue
 
 `production/` en el repo mantiene siempre la configuracion vigente para el
@@ -118,9 +135,12 @@ chmod +x "$OUTDIR/load-images.sh"
 
 ## 8. Empaquetar todo en un .tar.gz distribuible
 
+El contenido va plano dentro del archivo (sin carpeta contenedora): el
+`README.md` de despliegue indica `tar -xzf paquete.tar.gz` directo dentro
+del directorio de destino, asi que hay que empaquetar con `-C "$OUTDIR" .`.
+
 ```bash
-tar -czf "dist/sehcontrol-production-${VERSION}-amd64.tar.gz" \
-  -C dist "production-${VERSION}-amd64"
+tar -czf "dist/sehcontrol-production-${VERSION}-amd64.tar.gz" -C "$OUTDIR" .
 sha256sum "dist/sehcontrol-production-${VERSION}-amd64.tar.gz" \
   > "dist/sehcontrol-production-${VERSION}-amd64.tar.gz.sha256"
 ```
