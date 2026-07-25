@@ -169,6 +169,26 @@ addColumnIfMissing('devices', 'rustdesk_uuid', 'text');
 addColumnIfMissing('devices', 'claimed_by_user_id', 'integer references users(id) on delete set null');
 addColumnIfMissing('devices', 'claim_source', 'varchar(30)');
 
+// Un login aceptado prueba que el dispositivo fue visto al menos una vez.
+// Completa instalaciones creadas antes de que el login actualizara
+// last_heartbeat_at; el heartbeat periódico seguirá determinando "En linea".
+db.prepare(`
+  update device_sysinfo
+  set last_heartbeat_at = (
+    select max(l.created_at) from activity_log l
+    where l.action = 'device_login'
+      and l.target_type = 'device'
+      and l.target_id = device_sysinfo.rustdesk_id
+  )
+  where last_heartbeat_at is null
+    and exists (
+      select 1 from activity_log l
+      where l.action = 'device_login'
+        and l.target_type = 'device'
+        and l.target_id = device_sysinfo.rustdesk_id
+    )
+`).run();
+
 // Numera con receipt_number los pagos viejos que quedaron sin numero (los
 // que ya existian antes de agregar esta columna).
 const maxReceipt = db.prepare('select coalesce(max(receipt_number), 0) n from payments').get().n;

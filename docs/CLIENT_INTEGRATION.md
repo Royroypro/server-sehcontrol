@@ -44,6 +44,12 @@ dispositivo enviada por Android:
 Estos valores completan posteriormente los peers devueltos por `GET /api/ab`,
 aunque Android no haya llamado todavía a `/api/sysinfo`.
 
+El login también actualiza `last_heartbeat_at` como primera señal de presencia.
+Para mantener el estado **En línea**, el cliente debe continuar enviando
+`POST /api/heartbeat` aproximadamente cada 15 segundos mientras esté abierto.
+Sin esos heartbeats el servidor mostrará el dispositivo como **Offline**,
+no como **No visto**.
+
 Referencia de implementación real que ya usa el cliente stock, sin ningún cambio:
 `flutter/lib/models/user_model.dart` (`login()`, `refreshCurrentUser()`, `logOut()`) y
 `flutter/lib/common/hbbs/hbbs.dart` (`LoginRequest`, `LoginResponse`, `UserPayload`).

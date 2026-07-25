@@ -67,12 +67,13 @@ function saveLoginDeviceInfo({ id, uuid, deviceInfo, user }) {
   const hostname = typeof deviceInfo?.name === 'string' ? deviceInfo.name.trim() : null;
   const platform = typeof deviceInfo?.os === 'string' ? deviceInfo.os.trim() : null;
   db.prepare(`
-    insert into device_sysinfo (rustdesk_id, hostname, os, username, updated_at)
-    values (?, ?, ?, ?, datetime('now'))
+    insert into device_sysinfo (rustdesk_id, hostname, os, username, last_heartbeat_at, updated_at)
+    values (?, ?, ?, ?, datetime('now'), datetime('now'))
     on conflict(rustdesk_id) do update set
       hostname = coalesce(nullif(excluded.hostname, ''), device_sysinfo.hostname),
       os = coalesce(nullif(excluded.os, ''), device_sysinfo.os),
       username = coalesce(nullif(excluded.username, ''), device_sysinfo.username),
+      last_heartbeat_at = datetime('now'),
       updated_at = datetime('now')
   `).run(id, hostname, platform, user.email);
 
