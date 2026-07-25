@@ -38,6 +38,7 @@ db.exec(`
   create table if not exists devices (
     id integer primary key autoincrement,
     rustdesk_id varchar(100) not null unique,
+    rustdesk_uuid text,
     alias varchar(150),
     owner_user_id integer not null references users(id) on delete cascade,
     claimed_by_user_id integer references users(id) on delete set null,
@@ -164,6 +165,7 @@ addColumnIfMissing('platform_settings', 'whatsapp_number', 'varchar(50)');
 // Tags de la libreta de direcciones "legacy" (categorias "Cabinas"/"Clientes"
 // que pide el cliente). JSON array de strings, ej. '["Cabinas"]'.
 addColumnIfMissing('devices', 'tags', "text not null default '[]'");
+addColumnIfMissing('devices', 'rustdesk_uuid', 'text');
 addColumnIfMissing('devices', 'claimed_by_user_id', 'integer references users(id) on delete set null');
 addColumnIfMissing('devices', 'claim_source', 'varchar(30)');
 

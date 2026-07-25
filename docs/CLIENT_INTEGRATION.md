@@ -32,6 +32,18 @@ Base URL: la que el usuario configura como **API Server** en el cliente (`Settin
 | `/api/sysinfo` | POST | no (por id/uuid) | Info del equipo: hostname, os, cpu, memoria, usuario del sistema. |
 | `/api/heartbeat` | POST | no (por id/uuid) | Cada ~15s mientras el cliente esta abierto (con o sin conexiones activas). |
 
+Durante `POST /api/login`, el servidor también registra la identidad del
+dispositivo enviada por Android:
+
+- `id` se usa como ID RustDesk y para asociar el dispositivo a la cuenta.
+- `uuid` se conserva como identificador persistente adicional.
+- `deviceInfo.name` se guarda como `hostname`.
+- `deviceInfo.os` se guarda como `platform`.
+- El email autenticado se guarda como `username`.
+
+Estos valores completan posteriormente los peers devueltos por `GET /api/ab`,
+aunque Android no haya llamado todavía a `/api/sysinfo`.
+
 Referencia de implementación real que ya usa el cliente stock, sin ningún cambio:
 `flutter/lib/models/user_model.dart` (`login()`, `refreshCurrentUser()`, `logOut()`) y
 `flutter/lib/common/hbbs/hbbs.dart` (`LoginRequest`, `LoginResponse`, `UserPayload`).

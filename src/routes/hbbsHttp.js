@@ -47,12 +47,55 @@ function toUserPayload(user) {
   };
 }
 
+function normalizeUuid(uuid) {
+  if (uuid == null) return null;
+  if (typeof uuid === 'string') return uuid.trim().slice(0, 500) || null;
+  try {
+    return JSON.stringify(uuid).slice(0, 500);
+  } catch (_) {
+    return String(uuid).slice(0, 500);
+  }
+}
+
+function saveLoginDeviceInfo({ id, uuid, deviceInfo, user }) {
+  const normalizedUuid = normalizeUuid(uuid);
+  db.prepare(`
+    update devices set rustdesk_uuid = coalesce(?, rustdesk_uuid)
+    where rustdesk_id = ? and owner_user_id = ?
+  `).run(normalizedUuid, id, user.id);
+
+  const hostname = typeof deviceInfo?.name === 'string' ? deviceInfo.name.trim() : null;
+  const platform = typeof deviceInfo?.os === 'string' ? deviceInfo.os.trim() : null;
+  db.prepare(`
+    insert into device_sysinfo (rustdesk_id, hostname, os, username, updated_at)
+    values (?, ?, ?, ?, datetime('now'))
+    on conflict(rustdesk_id) do update set
+      hostname = coalesce(nullif(excluded.hostname, ''), device_sysinfo.hostname),
+      os = coalesce(nullif(excluded.os, ''), device_sysinfo.os),
+      username = coalesce(nullif(excluded.username, ''), device_sysinfo.username),
+      updated_at = datetime('now')
+  `).run(id, hostname, platform, user.email);
+
+  notifications.logActivity(
+    user.id,
+    'device_login',
+    'device',
+    id,
+    JSON.stringify({
+      uuid: normalizedUuid,
+      platform: platform || null,
+      hostname: hostname || null,
+      username: user.email,
+    }),
+  );
+}
+
 router.get('/login-options', (req, res) => {
   res.json([]); // sin SSO/OIDC: el cliente solo muestra el formulario usuario/clave
 });
 
 router.post('/login', (req, res) => {
-  const { username, password, type, id } = req.body || {};
+  const { username, password, type, id, uuid, deviceInfo } = req.body || {};
   if (type && !['account', undefined].includes(type)) {
     return res.status(400).json({ error: 'Metodo de login no soportado por este servidor' });
   }
@@ -73,7 +116,8 @@ router.post('/login', (req, res) => {
   // ir al panel web a "reclamar" nada a mano. Si ya no quedan cupos del plan,
   // se rechaza el login (sin emitir token) con un mensaje explicito.
   if (id) {
-    const owner = deviceClaim.getDeviceOwner(id);
+    const rustdeskId = String(id).trim();
+    const owner = deviceClaim.getDeviceOwner(rustdeskId);
     if (owner && owner.owner_user_id !== user.id) {
       return res.status(403).json({ error: 'Este equipo ya esta asociado a otra cuenta. Contacta al administrador.' });
     }
@@ -85,11 +129,12 @@ router.post('/login', (req, res) => {
           error: `Alcanzaste el limite de ${limit} equipo(s) de tu plan. Cierra sesion en otro equipo para poder ingresar aqui.`,
         });
       }
-      deviceClaim.claimDevice(user.id, id, null, {
+      deviceClaim.claimDevice(user.id, rustdeskId, null, {
         actorUserId: user.id,
         source: 'native_login',
       });
     }
+    saveLoginDeviceInfo({ id: rustdeskId, uuid, deviceInfo, user });
   }
 
   const token = issueToken(user);
