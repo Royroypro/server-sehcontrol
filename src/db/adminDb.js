@@ -189,6 +189,35 @@ db.prepare(`
     )
 `).run();
 
+// Versiones Android antiguas enviaron /sysinfo sin hostname/username y
+// borraron esos campos antes de que el upsert preservara valores existentes.
+// Recupera el ultimo dato confiable registrado durante /api/login.
+const incompleteDeviceInfo = db.prepare(`
+  select rustdesk_id from device_sysinfo
+  where hostname is null or hostname = '' or username is null or username = ''
+`).all();
+const latestDeviceLogin = db.prepare(`
+  select detail from activity_log
+  where action = 'device_login' and target_type = 'device' and target_id = ?
+  order by created_at desc limit 1
+`);
+const restoreDeviceInfo = db.prepare(`
+  update device_sysinfo set
+    hostname = coalesce(nullif(hostname, ''), ?),
+    username = coalesce(nullif(username, ''), ?)
+  where rustdesk_id = ?
+`);
+for (const row of incompleteDeviceInfo) {
+  const activity = latestDeviceLogin.get(row.rustdesk_id);
+  if (!activity?.detail) continue;
+  try {
+    const detail = JSON.parse(activity.detail);
+    restoreDeviceInfo.run(detail.hostname || null, detail.username || null, row.rustdesk_id);
+  } catch (_) {
+    // Actividad histórica con formato libre: se conserva sin intentar migrar.
+  }
+}
+
 // Numera con receipt_number los pagos viejos que quedaron sin numero (los
 // que ya existian antes de agregar esta columna).
 const maxReceipt = db.prepare('select coalesce(max(receipt_number), 0) n from payments').get().n;

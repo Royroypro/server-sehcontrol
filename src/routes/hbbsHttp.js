@@ -182,12 +182,26 @@ function safeParseTags(raw) {
   }
 }
 
+function normalizePlatform(value) {
+  const platform = String(value || '').trim();
+  const lower = platform.toLowerCase();
+  if (lower.includes('android')) return 'Android';
+  if (lower.includes('windows')) return 'Windows';
+  if (lower.includes('linux')) return 'Linux';
+  if (lower.includes('mac os') || lower.includes('macos') || lower.includes('darwin') || lower.includes('os x')) {
+    return 'Mac OS';
+  }
+  return platform;
+}
+
 // Libreta de direcciones "legacy" (pestana Address Book del cliente): lista
 // plana de los equipos reclamados por el usuario logueado, con tags.
 router.get('/ab', requireBearerAuth, (req, res) => {
   const devices = db.prepare(`
-    select d.rustdesk_id, d.alias, d.tags, s.hostname, s.username, s.os
+    select d.rustdesk_id, d.alias, d.tags, s.hostname, s.username, s.os,
+           u.email as owner_email
     from devices d left join device_sysinfo s on s.rustdesk_id = d.rustdesk_id
+    join users u on u.id = d.owner_user_id
     where d.owner_user_id = ?
   `).all(req.user.sub);
 
@@ -200,10 +214,10 @@ router.get('/ab', requireBearerAuth, (req, res) => {
 
   const peers = registeredDevices.map((d) => ({
     id: d.rustdesk_id,
-    username: d.username || '',
+    username: d.username || d.owner_email || '',
     hostname: d.hostname || '',
-    platform: d.os || '',
-    alias: d.alias || d.hostname || '',
+    platform: normalizePlatform(d.os),
+    alias: d.alias || '',
     tags: safeParseTags(d.tags),
     hash: '',
   }));
@@ -225,16 +239,28 @@ router.get('/ab', requireBearerAuth, (req, res) => {
 // cuenta -- va identificado solo por el id/uuid del dispositivo, igual que
 // en el protocolo real.
 router.post('/sysinfo', (req, res) => {
-  const { id, cpu, memory, os, hostname, username, version } = req.body || {};
+  const {
+    id, cpu, memory, version,
+    os, platform,
+    hostname, device_name, name,
+    username, user_name,
+  } = req.body || {};
   if (!id) return res.status(400).send('ID_NOT_FOUND');
+  const resolvedHostname = hostname || device_name || name || null;
+  const resolvedUsername = username || user_name || null;
+  const resolvedOs = os || platform || null;
   db.prepare(`
     insert into device_sysinfo (rustdesk_id, hostname, os, cpu, memory, username, client_version, updated_at)
     values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
     on conflict(rustdesk_id) do update set
-      hostname = excluded.hostname, os = excluded.os, cpu = excluded.cpu,
-      memory = excluded.memory, username = excluded.username,
-      client_version = excluded.client_version, updated_at = datetime('now')
-  `).run(id, hostname || null, os || null, cpu || null, memory || null, username || null, version || null);
+      hostname = coalesce(nullif(excluded.hostname, ''), device_sysinfo.hostname),
+      os = coalesce(nullif(excluded.os, ''), device_sysinfo.os),
+      cpu = coalesce(nullif(excluded.cpu, ''), device_sysinfo.cpu),
+      memory = coalesce(nullif(excluded.memory, ''), device_sysinfo.memory),
+      username = coalesce(nullif(excluded.username, ''), device_sysinfo.username),
+      client_version = coalesce(nullif(excluded.client_version, ''), device_sysinfo.client_version),
+      updated_at = datetime('now')
+  `).run(id, resolvedHostname, resolvedOs, cpu || null, memory || null, resolvedUsername, version || null);
   res.send('SYSINFO_UPDATED'); // string exacto que el cliente espera para dejar de reintentar
 });
 

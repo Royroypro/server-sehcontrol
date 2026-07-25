@@ -15,7 +15,7 @@ Descarga y descomprime el paquete de la version en:
 ```bash
 mkdir -p /home/ubuntu/server-sehcontrol
 cd /home/ubuntu/server-sehcontrol
-tar -xzf sehcontrol-production-2026.07.25.5-amd64.tar.gz
+tar -xzf sehcontrol-production-2026.07.25.6-amd64.tar.gz
 ```
 
 El paquete no contiene contrasenas ni claves privadas.

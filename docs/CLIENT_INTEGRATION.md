@@ -44,6 +44,12 @@ dispositivo enviada por Android:
 Estos valores completan posteriormente los peers devueltos por `GET /api/ab`,
 aunque Android no haya llamado todavía a `/api/sysinfo`.
 
+`POST /api/sysinfo` acepta tanto los nombres estándar como las variantes de
+Android: `hostname`/`device_name`/`name`, `username`/`user_name` y
+`os`/`platform`. Los campos ausentes no borran información ya guardada.
+En `GET /api/ab`, `platform` se normaliza a `Android`, `Windows`, `Linux` o
+`Mac OS`; `username` usa como respaldo el email propietario de la cuenta.
+
 El login también actualiza `last_heartbeat_at` como primera señal de presencia.
 Para mantener el estado **En línea**, el cliente debe continuar enviando
 `POST /api/heartbeat` aproximadamente cada 15 segundos mientras esté abierto.
