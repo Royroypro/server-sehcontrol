@@ -40,6 +40,8 @@ db.exec(`
     rustdesk_id varchar(100) not null unique,
     alias varchar(150),
     owner_user_id integer not null references users(id) on delete cascade,
+    claimed_by_user_id integer references users(id) on delete set null,
+    claim_source varchar(30),
     claimed_at datetime not null default (current_timestamp)
   );
 
@@ -162,6 +164,8 @@ addColumnIfMissing('platform_settings', 'whatsapp_number', 'varchar(50)');
 // Tags de la libreta de direcciones "legacy" (categorias "Cabinas"/"Clientes"
 // que pide el cliente). JSON array de strings, ej. '["Cabinas"]'.
 addColumnIfMissing('devices', 'tags', "text not null default '[]'");
+addColumnIfMissing('devices', 'claimed_by_user_id', 'integer references users(id) on delete set null');
+addColumnIfMissing('devices', 'claim_source', 'varchar(30)');
 
 // Numera con receipt_number los pagos viejos que quedaron sin numero (los
 // que ya existian antes de agregar esta columna).

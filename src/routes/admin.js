@@ -2,6 +2,7 @@ const express = require('express');
 const db = require('../db/adminDb');
 const hbbsDb = require('../db/hbbsDb');
 const deviceInfo = require('../deviceInfo');
+const deviceClaim = require('../deviceClaim');
 const membershipSync = require('../membershipSync');
 const notifications = require('../notifications');
 const { buildReceiptPdf } = require('../receipt');
@@ -318,6 +319,10 @@ router.post('/devices', (req, res) => {
     select u.*, p.max_devices from users u left join plans p on p.id = u.plan_id where u.id = ?
   `).get(owner_user_id);
   if (!owner) return res.status(404).json({ error: 'Usuario no encontrado' });
+  const normalizedId = rustdesk_id.trim();
+  if (hbbsDb.isAvailable() && !hbbsDb.peerExists(normalizedId)) {
+    return res.status(400).json({ error: 'Ese ID no esta registrado en hbbs y no puede asignarse' });
+  }
 
   const currentCount = db.prepare('select count(*) c from devices where owner_user_id = ?').get(owner.id).c;
   const limit = owner.max_devices ?? 0;
@@ -326,14 +331,43 @@ router.post('/devices', (req, res) => {
   }
 
   try {
-    const info = db.prepare(
-      'insert into devices (rustdesk_id, alias, owner_user_id) values (?, ?, ?)'
-    ).run(rustdesk_id.trim(), alias || null, owner.id);
-    membershipSync.syncDevice(rustdesk_id.trim(), owner.id);
+    const info = deviceClaim.claimDevice(owner.id, normalizedId, alias || null, {
+      actorUserId: req.user.sub,
+      source: 'admin_panel',
+    });
+    membershipSync.syncDevice(normalizedId, owner.id);
     res.status(201).json(db.prepare('select * from devices where id = ?').get(info.lastInsertRowid));
   } catch (e) {
     res.status(400).json({ error: e.message.includes('UNIQUE') ? 'Ese equipo ya esta asignado a un usuario' : e.message });
   }
+});
+
+router.get('/devices/:rustdeskId/audit', (req, res) => {
+  const rustdeskId = String(req.params.rustdeskId);
+  const device = db.prepare(`
+    select d.*, u.email as owner_email, actor.email as claimed_by_email
+    from devices d
+    join users u on u.id = d.owner_user_id
+    left join users actor on actor.id = d.claimed_by_user_id
+    where d.rustdesk_id = ?
+  `).get(rustdeskId);
+  const sysinfo = db.prepare('select * from device_sysinfo where rustdesk_id = ?').get(rustdeskId) || null;
+  const peer = hbbsDb.getPeerByRustdeskId(rustdeskId);
+  const activity = db.prepare(`
+    select l.*, u.email as actor_email
+    from activity_log l left join users u on u.id = l.actor_user_id
+    where (l.target_type = 'device' and l.target_id = ?) or l.detail like ?
+    order by l.created_at asc
+  `).all(rustdeskId, `%${rustdeskId}%`);
+  res.json({
+    rustdesk_id: rustdeskId,
+    registered: !!peer,
+    orphaned: !!device && hbbsDb.isAvailable() && !peer,
+    device: device || null,
+    sysinfo,
+    hbbs: peer,
+    activity,
+  });
 });
 
 router.delete('/devices/:id', (req, res) => {

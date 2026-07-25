@@ -3,6 +3,7 @@
 // (auto-asociacion al iniciar sesion, ver routes/hbbsHttp.js).
 const db = require('./db/adminDb');
 const hbbsDb = require('./db/hbbsDb');
+const notifications = require('./notifications');
 
 function getDeviceOwner(rustdeskId) {
   return db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
@@ -19,11 +20,18 @@ function planLimitFor(userId) {
   return row?.max_devices ?? 0;
 }
 
-function claimDevice(userId, rustdeskId, alias = null) {
+function claimDevice(userId, rustdeskId, alias = null, context = {}) {
   const info = db.prepare(
-    'insert into devices (rustdesk_id, alias, owner_user_id) values (?, ?, ?)'
-  ).run(rustdeskId, alias, userId);
+    'insert into devices (rustdesk_id, alias, owner_user_id, claimed_by_user_id, claim_source) values (?, ?, ?, ?, ?)'
+  ).run(rustdeskId, alias, userId, context.actorUserId ?? userId, context.source || 'unknown');
   hbbsDb.setPeerDisabled(rustdeskId, false);
+  notifications.logActivity(
+    context.actorUserId ?? userId,
+    'device_claimed',
+    'device',
+    rustdeskId,
+    JSON.stringify({ owner_user_id: userId, source: context.source || 'unknown' }),
+  );
   return info;
 }
 

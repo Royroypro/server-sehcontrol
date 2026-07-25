@@ -12,6 +12,7 @@
 // evitando implementar el protocolo completo de address books compartidos/grupos.
 const express = require('express');
 const db = require('../db/adminDb');
+const hbbsDb = require('../db/hbbsDb');
 const deviceClaim = require('../deviceClaim');
 const notifications = require('../notifications');
 const { verifyPassword, issueToken, requireBearerAuth } = require('../auth');
@@ -84,8 +85,10 @@ router.post('/login', (req, res) => {
           error: `Alcanzaste el limite de ${limit} equipo(s) de tu plan. Cierra sesion en otro equipo para poder ingresar aqui.`,
         });
       }
-      deviceClaim.claimDevice(user.id, id);
-      notifications.logActivity(null, 'device_auto_claimed', 'user', user.id, id);
+      deviceClaim.claimDevice(user.id, id, null, {
+        actorUserId: user.id,
+        source: 'native_login',
+      });
     }
   }
 
@@ -142,12 +145,19 @@ router.get('/ab', requireBearerAuth, (req, res) => {
     where d.owner_user_id = ?
   `).all(req.user.sub);
 
-  const peers = devices.map((d) => ({
+  // Un registro administrativo sin peer en hbbs no representa un dispositivo
+  // registrado. Se omite de la libreta para que no reaparezca como contacto
+  // fantasma; el admin puede localizarlo y borrarlo mediante el endpoint audit.
+  const registeredDevices = devices.filter((d) => (
+    !hbbsDb.isAvailable() || hbbsDb.peerExists(d.rustdesk_id)
+  ));
+
+  const peers = registeredDevices.map((d) => ({
     id: d.rustdesk_id,
     username: d.username || '',
     hostname: d.hostname || '',
     platform: d.os || '',
-    alias: d.alias || '',
+    alias: d.alias || d.hostname || '',
     tags: safeParseTags(d.tags),
     hash: '',
   }));
@@ -213,10 +223,22 @@ router.post('/ab', requireBearerAuth, (req, res) => {
     const parsed = JSON.parse(req.body?.data || '{}');
     const peers = Array.isArray(parsed.peers) ? parsed.peers : [];
     const update = db.prepare('update devices set alias = ?, tags = ? where rustdesk_id = ? and owner_user_id = ?');
+    const saveMetadata = db.prepare(`
+      insert into device_sysinfo (rustdesk_id, hostname, os, username, updated_at)
+      values (?, ?, ?, ?, datetime('now'))
+      on conflict(rustdesk_id) do update set
+        hostname = coalesce(nullif(excluded.hostname, ''), device_sysinfo.hostname),
+        os = coalesce(nullif(excluded.os, ''), device_sysinfo.os),
+        username = coalesce(nullif(excluded.username, ''), device_sysinfo.username),
+        updated_at = datetime('now')
+    `);
     for (const p of peers) {
       if (!p?.id) continue;
       const tags = Array.isArray(p.tags) ? p.tags.filter((t) => typeof t === 'string') : [];
-      update.run(p.alias || null, JSON.stringify(tags), p.id, req.user.sub);
+      const changed = update.run(p.alias || null, JSON.stringify(tags), p.id, req.user.sub);
+      if (changed.changes) {
+        saveMetadata.run(p.id, p.hostname || null, p.platform || null, p.username || null);
+      }
     }
   } catch (_) {
     // si el cliente manda algo inesperado, no rompemos el flujo: simplemente no persistimos este sync

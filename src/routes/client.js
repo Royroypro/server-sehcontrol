@@ -57,7 +57,10 @@ router.post('/me/devices', (req, res) => {
   }
 
   try {
-    const info = deviceClaim.claimDevice(self.id, rustdesk_id.trim(), alias || null);
+    const info = deviceClaim.claimDevice(self.id, rustdesk_id.trim(), alias || null, {
+      actorUserId: self.id,
+      source: 'client_panel',
+    });
     res.status(201).json(db.prepare('select * from devices where id = ?').get(info.lastInsertRowid));
   } catch (e) {
     res.status(400).json({ error: e.message.includes('UNIQUE') ? 'Ese equipo ya esta reclamado' : e.message });
