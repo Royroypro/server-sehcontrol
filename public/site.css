@@ -156,6 +156,7 @@ h1, h2, p { letter-spacing: 0; }
 .actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 22px;
 }
 

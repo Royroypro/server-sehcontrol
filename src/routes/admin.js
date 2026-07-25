@@ -65,30 +65,40 @@ router.post('/settings/rustdesk-key/rotate', (req, res) => {
 });
 
 router.get('/settings/client-download', (req, res) => {
-  res.json(clientDownload.getClientInfo());
+  res.json(clientDownload.getAllClientInfo());
 });
 
-const maxClientSizeMb = Number(process.env.CLIENT_EXE_MAX_MB || 500);
-const clientUpload = express.raw({
-  type: ['application/octet-stream', 'application/x-msdownload', 'application/vnd.microsoft.portable-executable'],
-  limit: `${maxClientSizeMb}mb`,
-});
+const CLIENT_UPLOAD_LIMITS_MB = {
+  windows: Number(process.env.CLIENT_EXE_MAX_MB || 500),
+  android: Number(process.env.CLIENT_APK_MAX_MB || 500),
+};
+const CLIENT_UPLOAD_TYPES = {
+  windows: ['application/octet-stream', 'application/x-msdownload', 'application/vnd.microsoft.portable-executable'],
+  android: ['application/octet-stream', 'application/vnd.android.package-archive'],
+};
 
-router.put('/settings/client-download', clientUpload, (req, res) => {
-  try {
-    const info = clientDownload.saveClient(req.body);
-    notifications.logActivity(
-      req.user.sub,
-      'client_exe_uploaded',
-      'platform_settings',
-      1,
-      `${info.filename} (${info.size_bytes} bytes)`,
-    );
-    res.json(info);
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
+for (const platform of Object.keys(CLIENT_UPLOAD_LIMITS_MB)) {
+  const clientUpload = express.raw({
+    type: CLIENT_UPLOAD_TYPES[platform],
+    limit: `${CLIENT_UPLOAD_LIMITS_MB[platform]}mb`,
+  });
+
+  router.put(`/settings/client-download/${platform}`, clientUpload, (req, res) => {
+    try {
+      const info = clientDownload.saveClient(platform, req.body);
+      notifications.logActivity(
+        req.user.sub,
+        'client_app_uploaded',
+        'platform_settings',
+        1,
+        `${platform}: ${info.filename} (${info.size_bytes} bytes)`,
+      );
+      res.json(info);
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+}
 
 // ---------- Dashboard ----------
 router.get('/stats', (req, res) => {

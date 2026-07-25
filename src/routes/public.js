@@ -6,14 +6,21 @@ const clientDownload = require('../clientDownload');
 const router = express.Router();
 
 router.get('/client-download/status', (req, res) => {
-  res.set('Cache-Control', 'no-store').json(clientDownload.getClientInfo());
+  res.set('Cache-Control', 'no-store').json(clientDownload.getAllClientInfo());
 });
 
-router.get('/client-download', (req, res) => {
-  const info = clientDownload.getClientInfo();
-  if (!info.available) return res.status(404).json({ error: 'El cliente aun no esta disponible' });
-  res.download(clientDownload.clientPath, 'sehcontrol.exe');
-});
+function clientDownloadHandler(platform) {
+  return (req, res) => {
+    const info = clientDownload.getClientInfo(platform);
+    if (!info.available) return res.status(404).json({ error: 'El cliente aun no esta disponible' });
+    res.download(clientDownload.platformPath(platform), info.filename);
+  };
+}
+
+router.get('/client-download/windows', clientDownloadHandler('windows'));
+router.get('/client-download/android', clientDownloadHandler('android'));
+// Alias retrocompatible con el enlace original, de antes de soportar Android.
+router.get('/client-download', clientDownloadHandler('windows'));
 
 router.get('/server-key', (req, res) => {
   try {

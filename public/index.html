@@ -26,7 +26,8 @@
           <p class="lead">Tus equipos disponibles cuando los necesitas, con acceso centralizado y una membresia que puedes consultar en todo momento.</p>
           <div class="actions">
             <a class="button" href="/login.html">Entrar a mi cuenta</a>
-            <a class="button outline download-client" href="/api/public/client-download" hidden>Descargar para Windows</a>
+            <a class="button outline download-client" data-platform="windows" href="/api/public/client-download/windows" hidden>Descargar para Windows</a>
+            <a class="button outline download-client" data-platform="android" href="/api/public/client-download/android" hidden>Descargar para Android</a>
           </div>
           <p class="account-note">El acceso es exclusivo para clientes con una cuenta activa.</p>
         </div>
@@ -163,10 +164,11 @@
     async function loadClientDownload() {
       try {
         const info = await fetch('/api/public/client-download/status', { cache: 'no-store' }).then((res) => res.json());
-        if (!info.available) return;
         document.querySelectorAll('.download-client').forEach((link) => {
+          const platformInfo = info[link.dataset.platform];
+          if (!platformInfo || !platformInfo.available) return;
           link.hidden = false;
-          link.download = info.filename;
+          link.download = platformInfo.filename;
         });
       } catch (_) {
         // La pagina sigue siendo util aunque todavia no exista un instalador.
