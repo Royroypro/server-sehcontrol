@@ -37,7 +37,10 @@ function toDateInputValue(iso) {
 }
 
 function deviceStatusBadge(live) {
-  if (!live || !live.registered_at) return '<span class="badge suspended">No visto</span>';
+  if (!live) return '<span class="badge suspended">No visto</span>';
   if (live.online) return '<span class="badge active">En linea</span>';
-  return '<span class="badge">Offline</span>';
+  if (live.last_heartbeat_at || live.registered_at) {
+    return '<span class="badge">Offline</span>';
+  }
+  return '<span class="badge suspended">No visto</span>';
 }
