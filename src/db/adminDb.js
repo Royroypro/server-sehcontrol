@@ -168,6 +168,12 @@ addColumnIfMissing('devices', 'tags', "text not null default '[]'");
 addColumnIfMissing('devices', 'rustdesk_uuid', 'text');
 addColumnIfMissing('devices', 'claimed_by_user_id', 'integer references users(id) on delete set null');
 addColumnIfMissing('devices', 'claim_source', 'varchar(30)');
+// Identificador de hardware estable (machine-id/MachineGuid/IOPlatformUUID,
+// hasheado) que el cliente manda en deviceInfo.machine_id. Permite reconocer
+// la misma maquina fisica cuando el cliente se reinstala y RustDesk le asigna
+// un id nuevo (ver deviceClaim.findDeviceByMachineId / migrateDeviceId).
+addColumnIfMissing('devices', 'machine_id', 'text');
+db.exec('create index if not exists idx_devices_machine on devices(owner_user_id, machine_id)');
 
 // Un login aceptado prueba que el dispositivo fue visto al menos una vez.
 // Completa instalaciones creadas antes de que el login actualizara

@@ -57,12 +57,21 @@ function normalizeUuid(uuid) {
   }
 }
 
-function saveLoginDeviceInfo({ id, uuid, deviceInfo, user }) {
+// Identificador de hardware estable que manda el cliente parchado en
+// deviceInfo.machine_id (machine-id/MachineGuid/IOPlatformUUID, ya hasheado
+// del lado cliente). Sobrevive a una reinstalacion; el rustdesk_id no.
+function normalizeMachineId(machineId) {
+  if (typeof machineId !== 'string') return null;
+  return machineId.trim().slice(0, 200) || null;
+}
+
+function saveLoginDeviceInfo({ id, uuid, deviceInfo, user, machineId }) {
   const normalizedUuid = normalizeUuid(uuid);
   db.prepare(`
-    update devices set rustdesk_uuid = coalesce(?, rustdesk_uuid)
+    update devices set rustdesk_uuid = coalesce(?, rustdesk_uuid),
+      machine_id = coalesce(?, machine_id)
     where rustdesk_id = ? and owner_user_id = ?
-  `).run(normalizedUuid, id, user.id);
+  `).run(normalizedUuid, machineId, id, user.id);
 
   const hostname = typeof deviceInfo?.name === 'string' ? deviceInfo.name.trim() : null;
   const platform = typeof deviceInfo?.os === 'string' ? deviceInfo.os.trim() : null;
@@ -118,24 +127,34 @@ router.post('/login', (req, res) => {
   // se rechaza el login (sin emitir token) con un mensaje explicito.
   if (id) {
     const rustdeskId = String(id).trim();
+    const machineId = normalizeMachineId(deviceInfo?.machine_id);
     const owner = deviceClaim.getDeviceOwner(rustdeskId);
     if (owner && owner.owner_user_id !== user.id) {
       return res.status(403).json({ error: 'Este equipo ya esta asociado a otra cuenta. Contacta al administrador.' });
     }
     if (!owner) {
-      const limit = deviceClaim.planLimitFor(user.id);
-      const current = deviceClaim.countDevices(user.id);
-      if (current >= limit) {
-        return res.status(403).json({
-          error: `Alcanzaste el limite de ${limit} equipo(s) de tu plan. Cierra sesion en otro equipo para poder ingresar aqui.`,
+      // Antes de tratarlo como equipo nuevo: si esta cuenta ya tiene un
+      // equipo reclamado con el mismo machine_id (misma maquina fisica,
+      // ej. RustDesk reinstalado con un id nuevo), reasignar ese registro
+      // en vez de crear uno nuevo -- no consume cupo y conserva alias/tags.
+      const previous = machineId ? deviceClaim.findDeviceByMachineId(user.id, machineId) : null;
+      if (previous && previous.rustdesk_id !== rustdeskId) {
+        deviceClaim.migrateDeviceId(previous.rustdesk_id, rustdeskId, user.id);
+      } else {
+        const limit = deviceClaim.planLimitFor(user.id);
+        const current = deviceClaim.countDevices(user.id);
+        if (current >= limit) {
+          return res.status(403).json({
+            error: `Alcanzaste el limite de ${limit} equipo(s) de tu plan. Cierra sesion en otro equipo para poder ingresar aqui.`,
+          });
+        }
+        deviceClaim.claimDevice(user.id, rustdeskId, null, {
+          actorUserId: user.id,
+          source: 'native_login',
         });
       }
-      deviceClaim.claimDevice(user.id, rustdeskId, null, {
-        actorUserId: user.id,
-        source: 'native_login',
-      });
     }
-    saveLoginDeviceInfo({ id: rustdeskId, uuid, deviceInfo, user });
+    saveLoginDeviceInfo({ id: rustdeskId, uuid, deviceInfo, user, machineId });
   }
 
   const token = issueToken(user);

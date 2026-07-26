@@ -602,3 +602,78 @@ comportamiento nuevo es transparente.
 
 Implementación de referencia: `src/deviceClaim.js` (lógica compartida de reclamar/liberar) y
 `src/routes/hbbsHttp.js` (`/api/login`, `/api/logout`) del repo `rustdesk-admin-panel`.
+
+---
+
+## 10. Nuevo campo requerido: `deviceInfo.machine_id` (26/07)
+
+Mensaje para quien toque el fork del cliente, tanto en Android (Kotlin/Rust) como en
+desktop (Windows/Linux/macOS, Flutter + Rust):
+
+**El problema que resuelve:** hoy, si un usuario desinstala RustDesk y borra los datos
+locales, al reinstalar el cliente genera un `id` de RustDesk completamente nuevo. El
+servidor no tiene forma de saber que es la misma máquina física, así que la trata como un
+equipo nuevo: el registro anterior queda huérfano/obsoleto y, si el plan tiene cupo
+limitado, puede incluso rechazar el reingreso por "límite de equipos alcanzado" cuando en
+realidad es el mismo equipo de siempre.
+
+**Lo que necesitamos que mande el cliente:** un identificador de hardware **estable**, que
+sobreviva a la desinstalación/reinstalación, dentro del mismo objeto `deviceInfo` que ya se
+manda en `POST /api/login` (junto a `name` y `os`):
+
+```jsonc
+{
+  "username": "...",
+  "password": "...",
+  "id": "123456789",      // el rustdesk id, como ya se manda hoy
+  "uuid": "...",           // ya existe, solo Android
+  "deviceInfo": {
+    "name": "DESKTOP-ABC123",
+    "os": "Windows 11",
+    "machine_id": "a1b2c3d4e5f6..."   // <-- NUEVO campo a agregar
+  }
+}
+```
+
+`machine_id` debe ser un **hash** (SHA-256 en hex, por ejemplo) del identificador de
+hardware real, no el valor crudo — es lo mismo que hace cualquier telemetría que respeta
+privacidad, y evita mandar en claro un identificador de máquina que podría usarse para
+otros fines. El servidor lo trata como un string opaco: no necesita decodificarlo, solo
+compararlo por igualdad.
+
+**De dónde sacar el identificador crudo antes de hashear, por plataforma:**
+
+- **Windows:** `MachineGuid` del registro, en
+  `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography\MachineGuid`. Es estable entre
+  reinstalaciones de cualquier software (sobrevive porque vive en el registro de Windows,
+  no en la carpeta de datos de la app) y solo cambia con un reinstall de Windows.
+- **Linux:** contenido de `/etc/machine-id` (o `/var/lib/dbus/machine-id` como respaldo si
+  el primero no existe). Estándar de facto en systemd, generado una vez por instalación de
+  SO.
+- **macOS:** `IOPlatformUUID`, obtenible vía
+  `ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID` (o la API `IOKit`
+  equivalente en Rust/Objective-C). Estable mientras no se reemplace la placa lógica.
+- **Android:** no hace falta agregar nada nuevo — el campo `uuid` que ya se manda
+  (Android `Settings.Secure.ANDROID_ID` o equivalente) ya cumple el mismo rol y el
+  servidor ya lo guarda. Opcionalmente pueden mandar el mismo valor también como
+  `deviceInfo.machine_id` para unificar el campo entre plataformas, pero no es
+  obligatorio: el servidor sigue leyendo `uuid` para Android.
+
+**Qué hace el servidor con esto (ya implementado, corriendo hoy):** en `POST /api/login`,
+si el `id` que llega no tiene dueño todavía, antes de tratarlo como equipo nuevo el
+servidor busca si esa cuenta ya tiene un equipo reclamado con el mismo `machine_id`. Si lo
+encuentra, **reasigna** ese registro (alias, tags, historial) al nuevo `id` en vez de crear
+uno nuevo — no consume un cupo adicional del plan y el equipo sigue apareciendo con el
+mismo alias/tag de siempre en la libreta de direcciones. Si no hay `machine_id` (cliente
+viejo sin este parche, o el campo viene vacío), el comportamiento es exactamente el de
+antes: se trata como equipo nuevo.
+
+**Importancia de mandarlo siempre que se pueda:** aunque el matching es "mejor esfuerzo" y
+no rompe nada si falta, mandarlo en *todos* los logins (no solo el primero) es lo que
+permite detectar la reinstalación. No hace falta mandarlo en `/api/sysinfo` ni
+`/api/heartbeat` — con que viaje en `POST /api/login` alcanza, porque es el único momento
+en que el servidor decide si el equipo es "nuevo" o no.
+
+Implementación de referencia: `src/deviceClaim.js`
+(`findDeviceByMachineId`, `migrateDeviceId`) y `src/routes/hbbsHttp.js`
+(`normalizeMachineId`, handler de `/api/login`) del repo `rustdesk-admin-panel`.
