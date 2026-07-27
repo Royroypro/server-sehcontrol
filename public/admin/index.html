@@ -243,80 +243,25 @@ async function renderUsers() {
       <td><span class="badge ${u.status}">${u.status}</span></td>
       <td class="row-actions">
         <button class="secondary" onclick='openUserModal(${JSON.stringify(u)})'>Editar</button>
-        <button class="secondary" onclick="openUserScreenCamModal(${u.id}, '${(u.email || '').replace(/'/g, "\\'")}')">ScreenCam</button>
+        <button class="secondary" onclick="goToAccountDevices(${u.id})">Equipos / ScreenCam</button>
         <button class="danger" onclick="deleteUser(${u.id})">Borrar</button>
       </td>
     </tr>`).join('') : '<tr><td colspan="8" class="empty">Sin usuarios todavia</td></tr>';
 }
 
-// ---------- ScreenCam (por cuenta, vista admin) ----------
-async function openUserScreenCamModal(userId, email) {
-  const div = document.createElement('div');
-  div.className = 'modal-backdrop';
-  div.innerHTML = `<div class="card modal" style="width:600px;max-width:90vw;"><h2>ScreenCam - ${email}</h2><div id="scLoading">Cargando...</div></div>`;
-  document.body.appendChild(div);
-
-  let data;
-  try {
-    data = await api(`/api/admin/users/${userId}/screen-cam`);
-  } catch (e) {
-    div.querySelector('#scLoading').innerHTML = `<div class="error">${e.message}</div>`;
-    return;
-  }
-
-  const m = data.module;
-  div.querySelector('.card').innerHTML = `
-    <h2>ScreenCam - ${email}</h2>
-    <form id="scOverrideForm" style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border,#333);">
-      <label class="check-label"><input name="enabled" type="checkbox" ${m.available ? 'checked' : ''}>Modulo disponible para esta cuenta</label>
-      <label>Cupo de equipos (vacio = heredar del plan)</label>
-      <input name="max_streams" type="number" min="0" value="${m.max_slots ?? ''}">
-      <div style="margin-top:8px;"><button type="submit" class="secondary">Guardar override de cuenta</button></div>
-    </form>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:8px;">Cupo: ${m.used_slots} / ${m.max_slots} en uso</p>
-    <table><thead><tr><th>Equipo</th><th>Activo</th><th>Estado real</th><th>Error</th><th></th></tr></thead>
-    <tbody>
-      ${data.devices.length ? data.devices.map((d) => `
-        <tr>
-          <td>${d.alias || d.hostname || d.rustdesk_id}<br><span style="font-size:11px;color:var(--muted)">${d.rustdesk_id}</span></td>
-          <td>${d.active ? '<span class="badge active">Si</span>' : '<span class="badge">No</span>'}</td>
-          <td>${d.actual_state || '-'}${d.rtsp_url ? `<br><span style="font-size:11px;color:var(--muted)">${d.rtsp_url}</span>` : ''}</td>
-          <td>${d.last_error ? `<span style="color:var(--danger)">${d.last_error}</span>` : '-'}</td>
-          <td><button class="secondary" onclick="toggleDeviceScreenCam('${d.rustdesk_id}', ${!d.active}, ${userId}, '${email.replace(/'/g, "\\'")}')">${d.active ? 'Forzar apagado' : 'Forzar encendido'}</button></td>
-        </tr>`).join('') : '<tr><td colspan="5" class="empty">Sin equipos</td></tr>'}
-    </tbody></table>
-    <div class="error" id="modalErr"></div>
-    <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
-      <button type="button" class="secondary" onclick="closeModal()">Cerrar</button>
-    </div>
-  `;
-  div.querySelector('#scOverrideForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const f = e.target;
-    try {
-      await api(`/api/admin/users/${userId}/screen-cam`, {
-        method: 'PUT',
-        body: { enabled: f.enabled.checked, max_streams: f.max_streams.value === '' ? null : Number(f.max_streams.value) },
-      });
-      closeModal();
-      openUserScreenCamModal(userId, email);
-    } catch (err) {
-      div.querySelector('#modalErr').textContent = err.message;
+// Atajo desde Usuarios: cambia a la pestana Equipos y abre/desplaza a la
+// tarjeta de esa cuenta, en vez de duplicar la vista de equipos en un modal.
+function goToAccountDevices(userId) {
+  document.querySelectorAll('.sidebar nav button').forEach((b) => b.classList.remove('active'));
+  document.querySelector('[data-tab="devices"]').classList.add('active');
+  renderDevices().then(() => {
+    const card = document.querySelector(`.account-card[data-owner-id="${userId}"]`);
+    if (card) {
+      card.open = true;
+      if (!card.dataset.scLoaded) { card.dataset.scLoaded = '1'; loadAccountScreenCam(userId); }
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
   });
-}
-
-async function toggleDeviceScreenCam(rustdeskId, enable, userId, email) {
-  try {
-    await api(`/api/admin/devices/${rustdeskId}/screen-cam`, {
-      method: 'PUT',
-      body: { enabled: enable, desired_state: enable ? 'running' : 'stopped' },
-    });
-    closeModal();
-    openUserScreenCamModal(userId, email);
-  } catch (e) {
-    alert(e.message);
-  }
 }
 
 function openUserModal(user) {
@@ -395,33 +340,146 @@ async function deleteUser(id) {
   catch (e) { alert(e.message); }
 }
 
-// ---------- Devices ----------
+// ---------- Devices (agrupados por cuenta, acordeon) ----------
 async function renderDevices() {
   const main = document.getElementById('main');
   main.innerHTML = `
-    <div class="toolbar"><h1>Equipos</h1><button onclick="openDeviceModal()">+ Asignar equipo</button></div>
-    <table><thead><tr><th>ID Sehcontrol</th><th>Alias</th><th>Propietario</th><th>Estado</th><th>Equipo</th><th>Usuario</th><th>IP</th><th>Asignado</th><th></th></tr></thead>
-    <tbody id="devicesBody"></tbody></table>
+    <div class="toolbar"><h1>Equipos por cuenta</h1><button onclick="openDeviceModal()">+ Asignar equipo</button></div>
+    <div id="accountsList">Cargando...</div>
   `;
   await loadPlans();
   USERS = await api('/api/admin/users');
   const devices = await api('/api/admin/devices');
-  const body = document.getElementById('devicesBody');
-  body.innerHTML = devices.length ? devices.map((d) => `
-    <tr>
-      <td>${d.rustdesk_id}</td>
-      <td>${d.alias || '-'}</td>
-      <td>${d.owner_email}</td>
-      <td>${deviceStatusBadge(d.live)}</td>
-      <td>${d.live?.hostname || '-'}${d.live?.os ? `<br><span style="font-size:11px;color:var(--muted)">${d.live.os}</span>` : ''}</td>
-      <td>${d.live?.username || '-'}</td>
-      <td>${d.live?.last_known_ip || '-'}</td>
-      <td>${fmtDate(d.claimed_at)}</td>
-      <td class="row-actions">
-        <button class="secondary" onclick="openUserScreenCamModal(${d.owner_id}, '${(d.owner_email || '').replace(/'/g, "\\'")}')">ScreenCam</button>
-        <button class="danger" onclick="unassignDevice(${d.id})">Quitar</button>
-      </td>
-    </tr>`).join('') : '<tr><td colspan="9" class="empty">Sin equipos asignados todavia</td></tr>';
+
+  const byOwner = new Map();
+  for (const d of devices) {
+    if (!byOwner.has(d.owner_id)) byOwner.set(d.owner_id, []);
+    byOwner.get(d.owner_id).push(d);
+  }
+
+  const list = document.getElementById('accountsList');
+  if (byOwner.size === 0) {
+    list.innerHTML = '<div class="empty">Sin equipos asignados todavia</div>';
+    return;
+  }
+
+  list.innerHTML = [...byOwner.entries()].map(([ownerId, devs]) => {
+    const user = USERS.find((u) => u.id === ownerId);
+    const email = user ? user.email : devs[0].owner_email;
+    const planLabel = user?.plan_name
+      ? `${user.plan_name} - ${devs.length}${user.max_devices ? '/' + user.max_devices : ''} equipo(s)`
+      : `${devs.length} equipo(s)`;
+    return `
+    <details class="card account-card" data-owner-id="${ownerId}">
+      <summary>
+        <div class="account-summary-info">
+          <strong>${user?.name ? user.name + ' - ' : ''}${email}</strong>
+          <span class="label">${planLabel}</span>
+          <span class="label" id="sc-summary-${ownerId}">ScreenCam: -</span>
+        </div>
+        ${user ? `<span class="badge ${user.status}">${user.status}</span>` : ''}
+      </summary>
+      <div class="account-body">
+        <div id="sc-override-${ownerId}" style="margin-bottom:14px;"></div>
+        <table><thead><tr><th>ID Sehcontrol</th><th>Alias</th><th>Estado</th><th>Equipo</th><th>Usuario</th><th>IP</th><th>Asignado</th><th>ScreenCam</th><th></th></tr></thead>
+        <tbody id="devicesBody-${ownerId}">
+          ${devs.map((d) => `
+          <tr data-rustdesk-id="${d.rustdesk_id}">
+            <td>${d.rustdesk_id}</td>
+            <td>${d.alias || '-'}</td>
+            <td>${deviceStatusBadge(d.live)}</td>
+            <td>${d.live?.hostname || '-'}${d.live?.os ? `<br><span style="font-size:11px;color:var(--muted)">${d.live.os}</span>` : ''}</td>
+            <td>${d.live?.username || '-'}</td>
+            <td>${d.live?.last_known_ip || '-'}</td>
+            <td>${fmtDate(d.claimed_at)}</td>
+            <td class="sc-cell">-</td>
+            <td class="row-actions"><button class="danger" onclick="unassignDevice(${d.id})">Quitar</button></td>
+          </tr>`).join('')}
+        </tbody></table>
+      </div>
+    </details>`;
+  }).join('');
+
+  document.querySelectorAll('.account-card').forEach((card) => {
+    card.addEventListener('toggle', () => {
+      if (card.open && !card.dataset.scLoaded) {
+        card.dataset.scLoaded = '1';
+        loadAccountScreenCam(Number(card.dataset.ownerId));
+      }
+    });
+  });
+}
+
+// Carga perezosa (solo al expandir una cuenta): cupo de la cuenta + estado
+// real de ScreenCam por equipo, mezclado con las filas ya renderizadas.
+async function loadAccountScreenCam(ownerId) {
+  const summary = document.getElementById(`sc-summary-${ownerId}`);
+  let data;
+  try {
+    data = await api(`/api/admin/users/${ownerId}/screen-cam`);
+  } catch (e) {
+    if (summary) summary.textContent = 'ScreenCam: error al cargar';
+    return;
+  }
+
+  const m = data.module;
+  if (summary) {
+    summary.textContent = m.available ? `ScreenCam: ${m.used_slots}/${m.max_slots} en uso` : 'ScreenCam: no disponible';
+  }
+
+  const overrideDiv = document.getElementById(`sc-override-${ownerId}`);
+  if (overrideDiv) {
+    overrideDiv.innerHTML = `
+      <form onsubmit="return saveAccountScreenCam(event, ${ownerId})" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:12px;border:1px solid var(--border);border-radius:8px;">
+        <label class="check-label" style="margin:0;width:auto;"><input type="checkbox" name="enabled" style="width:auto;" ${m.available ? 'checked' : ''}> Modulo disponible para esta cuenta</label>
+        <label style="margin:0;width:auto;">Cupo:</label>
+        <input type="number" name="max_streams" min="0" style="width:80px;" value="${m.max_slots ?? ''}">
+        <button type="submit" class="secondary">Guardar</button>
+        <span class="error" id="scErr-${ownerId}" style="margin:0;"></span>
+      </form>`;
+  }
+
+  const byId = new Map(data.devices.map((d) => [d.rustdesk_id, d]));
+  document.querySelectorAll(`#devicesBody-${ownerId} tr`).forEach((row) => {
+    const d = byId.get(row.dataset.rustdeskId);
+    const cell = row.querySelector('.sc-cell');
+    if (!cell) return;
+    if (!d) { cell.textContent = '-'; return; }
+    cell.innerHTML = `
+      ${d.active ? '<span class="badge active">Activo</span>' : '<span class="badge">Inactivo</span>'}
+      ${d.last_error ? `<br><span style="color:var(--danger);font-size:11px;">${d.last_error}</span>` : ''}
+      ${d.rtsp_url ? `<br><span style="font-size:11px;color:var(--muted);">${d.rtsp_url}</span>` : ''}
+      <br><button class="secondary" style="margin-top:4px;font-size:11px;padding:3px 8px;" onclick="toggleDeviceScreenCamInline('${d.rustdesk_id}', ${!d.active}, ${ownerId})">${d.active ? 'Apagar' : 'Encender'}</button>
+    `;
+  });
+}
+
+async function saveAccountScreenCam(e, ownerId) {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    await api(`/api/admin/users/${ownerId}/screen-cam`, {
+      method: 'PUT',
+      body: { enabled: f.enabled.checked, max_streams: f.max_streams.value === '' ? null : Number(f.max_streams.value) },
+    });
+    loadAccountScreenCam(ownerId);
+  } catch (err) {
+    const errEl = document.getElementById(`scErr-${ownerId}`);
+    if (errEl) errEl.textContent = err.message;
+  }
+  return false;
+}
+
+async function toggleDeviceScreenCamInline(rustdeskId, enable, ownerId) {
+  try {
+    await api(`/api/admin/devices/${rustdeskId}/screen-cam`, {
+      method: 'PUT',
+      body: { enabled: enable, desired_state: enable ? 'running' : 'stopped' },
+    });
+    loadAccountScreenCam(ownerId);
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 

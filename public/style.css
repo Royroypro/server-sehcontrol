@@ -112,6 +112,34 @@ tr:last-child td { border-bottom: none; }
 .badge.admin { background: rgba(47,111,237,0.15); color: var(--accent); }
 
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+
+.account-card { padding: 0; margin-bottom: 12px; }
+.account-card summary {
+  cursor: pointer;
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  list-style: none;
+}
+.account-card summary::-webkit-details-marker { display: none; }
+.account-card summary::before {
+  content: '';
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin-right: 12px;
+  flex-shrink: 0;
+  border-style: solid;
+  border-width: 5px 0 5px 7px;
+  border-color: transparent transparent transparent var(--muted);
+  transition: transform 0.15s ease;
+}
+.account-card[open] summary::before { transform: rotate(90deg); }
+.account-summary-info { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.account-summary-info .label { font-size: 12px; color: var(--muted); }
+.account-body { padding: 0 20px 20px; border-top: 1px solid var(--border); padding-top: 16px; }
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.4);
   display: flex; align-items: center; justify-content: center; z-index: 50;
