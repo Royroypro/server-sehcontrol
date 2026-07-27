@@ -37,11 +37,15 @@ function findDeviceByMachineId(userId, machineId) {
 function migrateDeviceId(oldRustdeskId, newRustdeskId, userId) {
   const tx = db.transaction(() => {
     db.prepare('delete from device_sysinfo where rustdesk_id = ?').run(newRustdeskId);
+    db.prepare('delete from device_screen_cam_settings where rustdesk_id = ?').run(newRustdeskId);
     db.prepare(
       'update devices set rustdesk_id = ? where rustdesk_id = ? and owner_user_id = ?'
     ).run(newRustdeskId, oldRustdeskId, userId);
     db.prepare(
       'update device_sysinfo set rustdesk_id = ? where rustdesk_id = ?'
+    ).run(newRustdeskId, oldRustdeskId);
+    db.prepare(
+      'update device_screen_cam_settings set rustdesk_id = ? where rustdesk_id = ?'
     ).run(newRustdeskId, oldRustdeskId);
   });
   tx();

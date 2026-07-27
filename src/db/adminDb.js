@@ -237,4 +237,48 @@ if (unnumbered.length) {
   tx(unnumbered);
 }
 
+// Licenciamiento del modulo ScreenCam (pantalla -> RTSP), jerarquia
+// plan -> cliente -> dispositivo (el override mas especifico pisa al mas
+// general). "enabled" nulo en customer_modules/device_screen_cam_settings
+// significa "sin override, heredar del nivel anterior" -- ver
+// src/screenCamPolicy.js (resolvePolicy) para la logica de resolucion.
+db.exec(`
+  create table if not exists plan_modules (
+    plan_id integer not null references plans(id) on delete cascade,
+    module varchar(50) not null,
+    enabled tinyint not null default 0,
+    mode varchar(20) not null default 'managed' check (mode in ('local','managed','supervised')),
+    max_streams integer not null default 1,
+    primary key (plan_id, module)
+  );
+
+  create table if not exists customer_modules (
+    user_id integer not null references users(id) on delete cascade,
+    module varchar(50) not null,
+    enabled tinyint,
+    mode varchar(20) check (mode in ('local','managed','supervised')),
+    max_streams integer,
+    primary key (user_id, module)
+  );
+
+  -- rustdesk_id sin "references devices(rustdesk_id)" a proposito: ese valor
+  -- cambia en una reinstalacion (ver deviceClaim.migrateDeviceId, que mueve
+  -- esta fila igual que ya hace con device_sysinfo). Una FK con el pragma
+  -- foreign_keys=ON activo violaria integridad referencial durante ese UPDATE
+  -- si no se declara ON UPDATE CASCADE, asi que se maneja a mano.
+  create table if not exists device_screen_cam_settings (
+    rustdesk_id varchar(100) primary key,
+    enabled tinyint,
+    desired_state varchar(20) not null default 'stopped' check (desired_state in ('running','stopped')),
+    mode varchar(20) check (mode in ('local','managed','supervised')),
+    max_streams integer,
+    actual_state varchar(20),
+    encoder varchar(50),
+    last_error varchar(300),
+    rtsp_clients integer,
+    last_report_at datetime,
+    updated_at datetime not null default (current_timestamp)
+  );
+`);
+
 module.exports = db;

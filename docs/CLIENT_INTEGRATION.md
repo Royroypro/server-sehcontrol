@@ -677,3 +677,124 @@ en que el servidor decide si el equipo es "nuevo" o no.
 Implementación de referencia: `src/deviceClaim.js`
 (`findDeviceByMachineId`, `migrateDeviceId`) y `src/routes/hbbsHttp.js`
 (`normalizeMachineId`, handler de `/api/login`) del repo `rustdesk-admin-panel`.
+
+---
+
+## 11. Licenciamiento de ScreenCam (backend listo, 27/07)
+
+Respuesta al mensaje sobre ScreenCam (captura de pantalla → RTSP). Implementamos la
+parte de servidor pedida: licenciar el módulo por plan/cliente/dispositivo, con el
+mismo patrón jerárquico que ya usan membresías. **Todavía no hay pantalla visual en el
+panel admin** — la gestión hoy es solo por API (endpoints abajo), pero el contrato con
+el cliente ya está fijo y no debería cambiar cuando agreguemos la UI después.
+
+### 11.1 Bloque `screen_cam` en `GET /api/client-policy`
+
+Extendimos el endpoint que ya consultan al arrancar (sección 1.2), agregando un query
+param opcional `id` (el `rustdesk_id` del propio equipo, que ya conocen localmente
+aunque no haya sesión activa) para poder resolver la política de ese dispositivo
+específico:
+
+```
+GET {api_server}/api/client-policy?id=123456789
+```
+
+Respuesta (agregado al `force_login`/`server_key` que ya devolvía):
+
+```json
+{
+  "force_login": true,
+  "server_key": { "...": "..." },
+  "screen_cam": {
+    "licensed": true,
+    "desired_state": "running",
+    "mode": "managed",
+    "max_streams": 1
+  }
+}
+```
+
+- Sin `?id=` en la query, o si el equipo no está reclamado por ninguna cuenta todavía:
+  devuelve la política por defecto **no licenciada**
+  (`{"licensed": false, "desired_state": "stopped", "mode": "local", "max_streams": 0}`).
+  No es un error, es el estado esperado antes del primer login/claim.
+- `mode` mapea 1:1 a la clave local `screencam-mode` que ya tienen (`local` / `managed`
+  / `supervised`).
+- Importante para el caso `supervised`: como este endpoint **no requiere login**
+  (a diferencia de `/api/membership/status`), mandar `id` acá es lo que permite que un
+  equipo ya licenciado en modo `supervised` siga bloqueado aunque la sesión de usuario
+  se haya cerrado o el arranque ocurra sin sesión guardada todavía — no depende del
+  token de acceso.
+
+### 11.2 Reporte de estado real, dentro del heartbeat que ya existe
+
+No agregamos un endpoint nuevo para esto — se reporta como un campo opcional más
+dentro del `POST /api/heartbeat` que ya mandan cada ~15s:
+
+```json
+{
+  "id": "123456789",
+  "screen_cam": {
+    "actual_state": "running",
+    "encoder": "h264_nvenc",
+    "last_error": null,
+    "rtsp_clients": 1
+  }
+}
+```
+
+- Todos los campos de `screen_cam` son opcionales e independientes — pueden mandar solo
+  los que tengan disponibles en cada heartbeat.
+- `last_error`: manden el string `no_h264_encoder` (u otro) cuando aplique, y `null` (u
+  omitan el campo) cuando el error ya no esté vigente — el servidor sobrescribe con lo
+  último que llegó, no lo acumula.
+- Esto es **solo lectura de estado** del lado servidor: el cliente nunca decide
+  `licensed` ni `desired_state` mandando el heartbeat, eso siempre lo resuelve
+  `client-policy` en base a la licencia configurada.
+
+### 11.3 Endpoints admin para licenciar (sin UI todavía, JSON puro)
+
+Todos requieren sesión de admin (`Authorization: Bearer <token>` de una cuenta
+`role=admin`, mismo mecanismo que el resto de `/admin/*`):
+
+```
+PUT /admin/plans/:id/screen-cam        { "enabled": true, "mode": "managed", "max_streams": 2 }
+PUT /admin/users/:id/screen-cam        { "enabled": false, "mode": null, "max_streams": null }
+GET /admin/devices/:rustdeskId/screen-cam
+PUT /admin/devices/:rustdeskId/screen-cam   { "enabled": true, "desired_state": "running", "mode": "supervised", "max_streams": 1 }
+```
+
+Jerarquía: **dispositivo > cliente > plan**. `enabled: null` en el nivel cliente o
+dispositivo significa "sin override, heredar del nivel anterior" — es la forma de
+volver a delegar en el plan después de haber puesto una excepción puntual.
+
+Cualquier cambio en estos tres niveles empuja un evento `screen_cam.update` por el
+WebSocket que ya usan (`/api/ws`) al usuario dueño del equipo afectado — mismo patrón
+que `membership_status`. **El cliente todavía no escucha este tipo de evento**, así que
+por ahora no hace nada si lo reciben; lo dejamos funcionando del lado servidor para
+cuando lo conecten.
+
+```json
+{ "type": "screen_cam.update", "data": { "rustdesk_id": "123456789", "licensed": true, "desired_state": "running", "mode": "managed", "max_streams": 1 } }
+```
+
+### 11.4 Lo que falta (explícitamente fuera de esta entrega)
+
+- **UI en el panel admin** (toggles por plan/cliente, pestaña ScreenCam en el detalle
+  del equipo): no está — la gestión hoy es solo vía los endpoints de 11.3. La vamos a
+  agregar en una pasada aparte; el contrato de arriba no debería cambiar cuando exista.
+- **Alertas automáticas** (equipo sin reportar, `no_h264_encoder`, intento de apagado en
+  modo `supervised`): el dato ya se está guardando (`device_screen_cam_settings`,
+  `activity_log` con `screen_cam_error_reported`), pero todavía no generamos `alerts`
+  automáticas a partir de esto como sí existen para vencimiento de plan. Pendiente.
+- **Órdenes `screen_cam.*` accionables por WebSocket** (ej. "detené el stream ahora"):
+  hoy solo empujamos el evento informativo `screen_cam.update` cuando cambia la
+  licencia — no hay todavía un comando explícito separado de eso. Cuando conecten el
+  WebSocket del lado cliente para este propósito, avisen si necesitan algo más granular
+  que "la política cambió, volvé a leerla".
+
+Implementación de referencia: `src/screenCamPolicy.js` (`resolvePolicy`,
+`setPlanModule`, `setCustomerModule`, `setDeviceOverride`, `reportDeviceState`),
+`src/routes/clientExtensions.js` (`GET /client-policy`), `src/routes/hbbsHttp.js`
+(`POST /heartbeat`) y `src/routes/admin.js` (endpoints `/screen-cam`) del repo
+`rustdesk-admin-panel`.

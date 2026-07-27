@@ -15,6 +15,7 @@ const db = require('../db/adminDb');
 const hbbsDb = require('../db/hbbsDb');
 const deviceClaim = require('../deviceClaim');
 const notifications = require('../notifications');
+const screenCamPolicy = require('../screenCamPolicy');
 const { verifyPassword, issueToken, requireBearerAuth } = require('../auth');
 
 const router = express.Router();
@@ -286,8 +287,13 @@ router.post('/sysinfo', (req, res) => {
 // Heartbeat cada ~15s mientras el cliente esta abierto (con o sin conexiones
 // activas). Se usa solo para "ultima vez visto" -> estado en linea real,
 // mejor que lo que hbbs por si solo puede ofrecer (no persiste eso).
+// Reporte opcional de estado real de ScreenCam, mandado dentro del mismo
+// heartbeat que ya existe (no hace falta un endpoint nuevo): { screen_cam:
+// { actual_state, encoder, last_error, rtsp_clients } }. Es solo lectura de
+// estado -- el cliente no decide "licensed"/"desired_state" aca, eso lo
+// resuelve el servidor en /api/client-policy.
 router.post('/heartbeat', (req, res) => {
-  const { id } = req.body || {};
+  const { id, screen_cam: screenCam } = req.body || {};
   if (id) {
     db.prepare(`
       update device_sysinfo set last_heartbeat_at = datetime('now') where rustdesk_id = ?
@@ -299,6 +305,15 @@ router.post('/heartbeat', (req, res) => {
       insert into device_sysinfo (rustdesk_id, last_heartbeat_at) values (?, datetime('now'))
       on conflict(rustdesk_id) do nothing
     `).run(id);
+
+    if (screenCam && typeof screenCam === 'object') {
+      screenCamPolicy.reportDeviceState(id, {
+        actualState: typeof screenCam.actual_state === 'string' ? screenCam.actual_state.slice(0, 20) : null,
+        encoder: typeof screenCam.encoder === 'string' ? screenCam.encoder.slice(0, 50) : null,
+        lastError: typeof screenCam.last_error === 'string' ? screenCam.last_error.slice(0, 300) : null,
+        rtspClients: Number.isInteger(screenCam.rtsp_clients) ? screenCam.rtsp_clients : null,
+      });
+    }
   }
   res.json({}); // sin campos strategy/disconnect/sysinfo: no se implementan esas funciones
 });

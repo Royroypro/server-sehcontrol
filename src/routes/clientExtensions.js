@@ -7,17 +7,30 @@ const { requireBearerAuth } = require('../auth');
 const { isUserBlocked } = require('../membershipSync');
 const { formatCurrency } = require('../format');
 const rustdeskKey = require('../rustdeskKey');
+const deviceClaim = require('../deviceClaim');
+const screenCamPolicy = require('../screenCamPolicy');
 
 const router = express.Router();
 
 // Se consulta ANTES de loguearse (sin auth), en el arranque de la app, para
 // decidir si se debe forzar el modal de login antes de mostrar la ventana
 // principal. Toggle operativo via .env, sin tocar codigo.
+//
+// Acepta un query param opcional `id` (el rustdesk_id del propio equipo, que
+// el cliente ya conoce localmente aunque no haya sesion activa) para poder
+// devolver tambien la politica de ScreenCam de ese dispositivo -- necesario
+// para que un equipo en modo "supervised" siga sin poder apagarse aunque el
+// usuario cierre sesion o no la haya iniciado todavia en este arranque. Sin
+// `id`, o si el equipo no esta reclamado por ninguna cuenta, se devuelve la
+// politica por defecto (no licenciado).
 router.get('/client-policy', (req, res) => {
   try {
+    const rustdeskId = typeof req.query.id === 'string' ? req.query.id.trim().slice(0, 100) : null;
+    const owner = rustdeskId ? deviceClaim.getDeviceOwner(rustdeskId) : null;
     res.set('Cache-Control', 'no-store').json({
       force_login: (process.env.FORCE_LOGIN || 'true') === 'true',
       server_key: rustdeskKey.getPublicKeyInfo(),
+      screen_cam: screenCamPolicy.resolvePolicy(owner?.owner_user_id, rustdeskId),
     });
   } catch (e) {
     res.status(500).json({ error: `No se pudo leer la key del servidor: ${e.message}` });

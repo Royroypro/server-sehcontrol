@@ -11,6 +11,7 @@ const { requireAuth, requireAdmin, hashPassword } = require('../auth');
 const rustdeskKey = require('../rustdeskKey');
 const { pushToAll } = require('../ws');
 const clientDownload = require('../clientDownload');
+const screenCamPolicy = require('../screenCamPolicy');
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -368,6 +369,61 @@ router.get('/devices/:rustdeskId/audit', (req, res) => {
     hbbs: peer,
     activity,
   });
+});
+
+// ---------- Licenciamiento ScreenCam (plan -> cliente -> dispositivo) ----------
+// Sin UI todavia (ver docs/CLIENT_INTEGRATION.md seccion 11): estos
+// endpoints son el punto de control mientras tanto. El override mas
+// especifico pisa al mas general -- ver src/screenCamPolicy.js.
+
+router.put('/plans/:id/screen-cam', (req, res) => {
+  const plan = db.prepare('select id from plans where id = ?').get(req.params.id);
+  if (!plan) return res.status(404).json({ error: 'Plan no encontrado' });
+  const { enabled, mode, max_streams: maxStreams } = req.body || {};
+  if (mode && !['local', 'managed', 'supervised'].includes(mode)) {
+    return res.status(400).json({ error: 'mode invalido' });
+  }
+  screenCamPolicy.setPlanModule(plan.id, { enabled: !!enabled, mode, maxStreams }, req.user.sub);
+  res.json({ ok: true });
+});
+
+router.put('/users/:id/screen-cam', (req, res) => {
+  const user = db.prepare('select id from users where id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+  const { enabled, mode, max_streams: maxStreams } = req.body || {};
+  if (mode && !['local', 'managed', 'supervised'].includes(mode)) {
+    return res.status(400).json({ error: 'mode invalido' });
+  }
+  // enabled puede venir null explicito para volver a heredar del plan.
+  const normalizedEnabled = enabled === null ? null : !!enabled;
+  screenCamPolicy.setCustomerModule(user.id, { enabled: normalizedEnabled, mode, maxStreams }, req.user.sub);
+  res.json({ ok: true });
+});
+
+router.get('/devices/:rustdeskId/screen-cam', (req, res) => {
+  const rustdeskId = String(req.params.rustdeskId);
+  const device = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
+  res.json({
+    policy: screenCamPolicy.resolvePolicy(device.owner_user_id, rustdeskId),
+    reported: db.prepare('select actual_state, encoder, last_error, rtsp_clients, last_report_at from device_screen_cam_settings where rustdesk_id = ?').get(rustdeskId) || null,
+  });
+});
+
+router.put('/devices/:rustdeskId/screen-cam', (req, res) => {
+  const rustdeskId = String(req.params.rustdeskId);
+  const device = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
+  const { enabled, desired_state: desiredState, mode, max_streams: maxStreams } = req.body || {};
+  if (desiredState && !['running', 'stopped'].includes(desiredState)) {
+    return res.status(400).json({ error: 'desired_state invalido' });
+  }
+  if (mode && !['local', 'managed', 'supervised'].includes(mode)) {
+    return res.status(400).json({ error: 'mode invalido' });
+  }
+  const normalizedEnabled = enabled === null ? null : !!enabled;
+  screenCamPolicy.setDeviceOverride(rustdeskId, { enabled: normalizedEnabled, desiredState, mode, maxStreams }, req.user.sub);
+  res.json({ ok: true });
 });
 
 router.delete('/devices/:id', (req, res) => {
