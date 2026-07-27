@@ -13,6 +13,7 @@
     <nav>
       <button class="active" data-tab="plan">Mi plan</button>
       <button data-tab="devices">Mis equipos</button>
+      <button data-tab="screencam">ScreenCam</button>
       <button data-tab="payments">Mis pagos</button>
       <button data-tab="messages">Mensajes <span id="unreadBadge"></span></button>
     </nav>
@@ -23,7 +24,7 @@
 
 <script src="/api.js"></script>
 <script>
-const tabs = { plan: renderPlan, devices: renderDevices, payments: renderPayments, messages: renderMessages };
+const tabs = { plan: renderPlan, devices: renderDevices, screencam: renderScreenCam, payments: renderPayments, messages: renderMessages };
 document.querySelectorAll('.sidebar nav button').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.sidebar nav button').forEach((b) => b.classList.remove('active'));
@@ -100,6 +101,54 @@ async function releaseDevice(id) {
   if (!confirm('¿Liberar este equipo de tu cuenta?')) return;
   try { await api(`/api/client/me/devices/${id}`, { method: 'DELETE' }); renderDevices(); }
   catch (e) { alert(e.message); }
+}
+
+// ---------- ScreenCam ----------
+async function renderScreenCam() {
+  const main = document.getElementById('main');
+  main.innerHTML = '<h1>ScreenCam</h1><div id="scContent">Cargando...</div>';
+  const content = document.getElementById('scContent');
+  let data;
+  try {
+    data = await api('/api/client/me/screen-cam');
+  } catch (e) {
+    content.innerHTML = `<div class="error">${e.message}</div>`;
+    return;
+  }
+  const m = data.module;
+  if (!m.available) {
+    content.innerHTML = '<p style="color:var(--muted);">Tu plan no incluye ScreenCam. Contacta al administrador si queres agregarlo.</p>';
+    return;
+  }
+  content.innerHTML = `
+    <div class="stat-row" style="margin-bottom:16px;">
+      <div class="stat"><div class="num">${m.used_slots} / ${m.max_slots}</div><div class="label">Cupos en uso</div></div>
+    </div>
+    <table><thead><tr><th>Equipo</th><th>Activo</th><th>Estado</th><th>URL RTSP</th><th></th></tr></thead>
+    <tbody id="scDevicesBody"></tbody></table>
+  `;
+  const body = document.getElementById('scDevicesBody');
+  body.innerHTML = data.devices.length ? data.devices.map((d) => `
+    <tr>
+      <td>${d.alias || d.hostname || d.rustdesk_id}<br><span style="font-size:11px;color:var(--muted)">${d.rustdesk_id}</span></td>
+      <td>${d.active ? '<span class="badge active">Activo</span>' : '<span class="badge">Inactivo</span>'}</td>
+      <td>${d.actual_state || '-'}${d.last_error ? `<br><span style="color:var(--danger);font-size:11px;">${d.last_error}</span>` : ''}</td>
+      <td>${d.rtsp_url ? `<code style="font-size:11px;">${d.rtsp_url}</code>` : '-'}</td>
+      <td class="row-actions">
+        ${d.active
+          ? `<button class="danger" onclick="toggleMyScreenCam('${d.rustdesk_id}', false)">Desactivar</button>`
+          : `<button onclick="toggleMyScreenCam('${d.rustdesk_id}', true)" ${m.used_slots >= m.max_slots ? 'disabled title="Sin cupos disponibles"' : ''}>Activar</button>`}
+      </td>
+    </tr>`).join('') : '<tr><td colspan="5" class="empty">No tienes equipos asignados todavia</td></tr>';
+}
+
+async function toggleMyScreenCam(rustdeskId, activate) {
+  try {
+    await api(`/api/client/me/screen-cam/devices/${rustdeskId}/${activate ? 'activate' : 'deactivate'}`, { method: 'POST' });
+    renderScreenCam();
+  } catch (e) {
+    alert(e.message);
+  }
 }
 
 async function renderPayments() {

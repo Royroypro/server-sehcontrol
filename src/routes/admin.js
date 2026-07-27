@@ -150,7 +150,12 @@ router.get('/stats', (req, res) => {
 
 // ---------- Plans ----------
 router.get('/plans', (req, res) => {
-  res.json(db.prepare('select * from plans order by price_cents asc').all());
+  res.json(db.prepare(`
+    select p.*, pm.enabled as screen_cam_enabled, pm.mode as screen_cam_mode, pm.max_streams as screen_cam_max_streams
+    from plans p
+    left join plan_modules pm on pm.plan_id = p.id and pm.module = 'screen_cam'
+    order by p.price_cents asc
+  `).all());
 });
 
 router.post('/plans', (req, res) => {

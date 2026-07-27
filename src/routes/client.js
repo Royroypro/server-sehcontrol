@@ -4,6 +4,7 @@ const hbbsDb = require('../db/hbbsDb');
 const deviceInfo = require('../deviceInfo');
 const deviceClaim = require('../deviceClaim');
 const { requireAuth } = require('../auth');
+const screenCamPolicy = require('../screenCamPolicy');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -97,6 +98,37 @@ router.post('/me/alerts/:id/read', (req, res) => {
   if (!alert) return res.status(404).json({ error: 'No encontrado' });
   db.prepare('insert or ignore into alert_reads (alert_id, user_id) values (?, ?)').run(alert.id, req.user.sub);
   res.json({ ok: true });
+});
+
+// ScreenCam: el cliente ve sus equipos y elige en cuales gastar el cupo que
+// le dio su plan (ver docs/CLIENT_INTEGRATION.md seccion 12). Mismo shape
+// que consume el admin en GET /api/admin/users/:id/screen-cam.
+router.get('/me/screen-cam', (req, res) => {
+  res.json(screenCamPolicy.listDevicesForCustomer(req.user.sub));
+});
+
+function handleModuleError(res, e) {
+  const statusByCode = { NOT_FOUND: 404, NOT_LICENSED: 403, QUOTA_EXCEEDED: 409 };
+  const status = statusByCode[e.code] || 400;
+  res.status(status).json({ error: e.message });
+}
+
+router.post('/me/screen-cam/devices/:rustdeskId/activate', (req, res) => {
+  try {
+    screenCamPolicy.activateDevice(req.user.sub, String(req.params.rustdeskId));
+    res.json({ ok: true });
+  } catch (e) {
+    handleModuleError(res, e);
+  }
+});
+
+router.post('/me/screen-cam/devices/:rustdeskId/deactivate', (req, res) => {
+  try {
+    screenCamPolicy.deactivateDevice(req.user.sub, String(req.params.rustdeskId));
+    res.json({ ok: true });
+  } catch (e) {
+    handleModuleError(res, e);
+  }
 });
 
 module.exports = router;
