@@ -778,6 +778,18 @@ async function renderSettings() {
     </div>
 
     <div class="card" style="max-width:520px;margin-bottom:20px;">
+      <h2 style="font-size:15px;margin-top:0;">Avisos de vencimiento</h2>
+      <p class="settings-help">Dias antes del vencimiento del plan en los que se genera un aviso automatico (in-app + email si hay SMTP configurado). El cliente ya los muestra automaticamente, sin importar cuantos dias falten.</p>
+      <form id="expiryForm">
+        <label>Dias (separados por coma)</label>
+        <input name="expiry_warning_days" placeholder="ej. 10,7,5,3,1">
+        <div class="error" id="expiryErr"></div>
+        <div class="msg-ok" id="expiryOk" style="display:none;">Guardado.</div>
+        <button type="submit" style="margin-top:14px;">Guardar</button>
+      </form>
+    </div>
+
+    <div class="card" style="max-width:520px;margin-bottom:20px;">
       <h2 style="font-size:15px;margin-top:0;">Key de RustDesk</h2>
       <p class="settings-help">Esta es la key publica que deben usar los clientes para conectarse a este servidor.</p>
       <label>Key publica actual</label>
@@ -850,9 +862,37 @@ async function renderSettings() {
     pf.contact_email.value = settings.contact_email || '';
     pf.default_currency.value = settings.default_currency || 'USD';
     pf.language.value = settings.language || 'es';
+
+    let expiryDays = [10, 7, 5, 3, 1];
+    try {
+      const parsed = JSON.parse(settings.expiry_warning_days || '[]');
+      if (Array.isArray(parsed) && parsed.length) expiryDays = parsed;
+    } catch (_) { /* usar el default si viene invalido */ }
+    document.getElementById('expiryForm').expiry_warning_days.value = expiryDays.join(',');
   } catch (e) {
     document.getElementById('platformErr').textContent = e.message;
   }
+
+  document.getElementById('expiryForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const okEl = document.getElementById('expiryOk');
+    const errEl = document.getElementById('expiryErr');
+    okEl.style.display = 'none';
+    errEl.textContent = '';
+    const days = f.expiry_warning_days.value.split(',').map((s) => s.trim()).filter(Boolean).map(Number);
+    if (!days.length || days.some((d) => !Number.isInteger(d) || d < 0)) {
+      errEl.textContent = 'Ingresa numeros enteros no negativos separados por coma';
+      return;
+    }
+    try {
+      SETTINGS = await api('/api/admin/settings', { method: 'PUT', body: { expiry_warning_days: days } });
+      f.expiry_warning_days.value = JSON.parse(SETTINGS.expiry_warning_days).join(',');
+      okEl.style.display = 'block';
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  });
 
   document.getElementById('platformForm').addEventListener('submit', async (e) => {
     e.preventDefault();

@@ -162,6 +162,10 @@ addColumnIfMissing('users', 'name', 'varchar(150)');
 addColumnIfMissing('payments', 'status', "varchar(20) not null default 'paid'");
 addColumnIfMissing('payments', 'receipt_number', 'integer');
 addColumnIfMissing('platform_settings', 'whatsapp_number', 'varchar(50)');
+// Dias antes del vencimiento en los que se genera un aviso automatico
+// (expiry_warning). JSON array de enteros, ej. '[10,7,5,3,1]'. Configurable
+// desde el panel (Configuracion) -- ver src/notifications.js generateExpiryAlerts.
+addColumnIfMissing('platform_settings', 'expiry_warning_days', "text not null default '[10,7,5,3,1]'");
 // Tags de la libreta de direcciones "legacy" (categorias "Cabinas"/"Clientes"
 // que pide el cliente). JSON array de strings, ej. '["Cabinas"]'.
 addColumnIfMissing('devices', 'tags', "text not null default '[]'");

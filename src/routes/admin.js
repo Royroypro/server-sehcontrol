@@ -22,12 +22,24 @@ router.get('/settings', (req, res) => {
 });
 
 router.put('/settings', (req, res) => {
-  const { business_name, tax_id, address, phone, whatsapp_number, contact_email, default_currency, language } = req.body || {};
+  const {
+    business_name, tax_id, address, phone, whatsapp_number, contact_email, default_currency, language,
+    expiry_warning_days: expiryWarningDays,
+  } = req.body || {};
   const current = db.prepare('select * from platform_settings where id = 1').get();
+
+  let expiryWarningDaysJson = current.expiry_warning_days;
+  if (expiryWarningDays !== undefined) {
+    if (!Array.isArray(expiryWarningDays) || expiryWarningDays.some((d) => !Number.isInteger(d) || d < 0)) {
+      return res.status(400).json({ error: 'expiry_warning_days debe ser un arreglo de enteros no negativos' });
+    }
+    expiryWarningDaysJson = JSON.stringify([...new Set(expiryWarningDays)].sort((a, b) => b - a));
+  }
+
   db.prepare(`
     update platform_settings set
       business_name = ?, tax_id = ?, address = ?, phone = ?, whatsapp_number = ?, contact_email = ?,
-      default_currency = ?, language = ?, updated_at = datetime('now')
+      default_currency = ?, language = ?, expiry_warning_days = ?, updated_at = datetime('now')
     where id = 1
   `).run(
     business_name ?? current.business_name,
@@ -38,6 +50,7 @@ router.put('/settings', (req, res) => {
     contact_email ?? current.contact_email,
     default_currency || current.default_currency,
     language || current.language,
+    expiryWarningDaysJson,
   );
   notifications.logActivity(req.user.sub, 'settings_updated', 'platform_settings', 1, business_name || null);
   res.json(db.prepare('select * from platform_settings where id = 1').get());

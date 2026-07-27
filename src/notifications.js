@@ -78,13 +78,29 @@ async function createAlert({ userId = null, type, title, message, dedupeKey = nu
   return info.lastInsertRowid;
 }
 
-const THRESHOLDS_DAYS = [7, 3, 1];
+const DEFAULT_THRESHOLDS_DAYS = [10, 7, 5, 3, 1];
+
+// Configurable desde el panel (Configuracion -> Avisos de vencimiento).
+// Guardado como JSON en platform_settings.expiry_warning_days.
+function getExpiryThresholds() {
+  const row = db.prepare('select expiry_warning_days from platform_settings where id = 1').get();
+  try {
+    const parsed = JSON.parse(row?.expiry_warning_days || '[]');
+    if (Array.isArray(parsed) && parsed.length && parsed.every((d) => Number.isInteger(d) && d >= 0)) {
+      return parsed;
+    }
+  } catch (_) {
+    // config invalida o ausente: usar el default
+  }
+  return DEFAULT_THRESHOLDS_DAYS;
+}
 
 // Recorre usuarios activos con plan y genera avisos de vencimiento proximo,
 // vencido, y suspension. dedupe_key incluye la fecha de vencimiento actual:
 // si el usuario renueva, plan_expires_at cambia y los avisos se pueden
 // volver a generar en el siguiente ciclo.
 async function generateExpiryAlerts() {
+  const thresholds = getExpiryThresholds();
   const users = db.prepare(`
     select id, email, status, plan_expires_at from users where role = 'client'
   `).all();
@@ -117,7 +133,7 @@ async function generateExpiryAlerts() {
       if (id) created++;
       continue;
     }
-    for (const threshold of THRESHOLDS_DAYS) {
+    for (const threshold of thresholds) {
       if (daysLeft === threshold) {
         const id = await createAlert({
           userId: u.id,
