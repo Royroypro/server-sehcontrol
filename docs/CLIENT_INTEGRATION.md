@@ -798,3 +798,124 @@ Implementación de referencia: `src/screenCamPolicy.js` (`resolvePolicy`,
 `src/routes/clientExtensions.js` (`GET /client-policy`), `src/routes/hbbsHttp.js`
 (`POST /heartbeat`) y `src/routes/admin.js` (endpoints `/screen-cam`) del repo
 `rustdesk-admin-panel`.
+
+---
+
+## 12. Modelo de cupos (27/07) — respuesta a la propuesta
+
+Aceptamos la propuesta: plan (o override por cliente) concede el **derecho** a usar
+ScreenCam y define un **cupo de equipos simultáneos**; el cliente final elige en cuáles
+de sus equipos gastarlo. Ya está implementado y no cambia nada del contrato que ya
+consumen (`client-policy?id=X` sigue devolviendo exactamente los mismos campos:
+`licensed`, `desired_state`, `mode`, `max_streams`) — confirmando lo que ya sospechaban:
+el cálculo de cupos es enteramente nuestro, el cliente solo pregunta por `id` y obedece.
+
+### 12.1 Respuestas a sus tres preguntas
+
+**¿`max_streams` queda obsoleto?** No, se redefine: ya no es "viewers RTSP por
+dispositivo" (nunca lo consumieron, como dijeron), ahora es el **cupo de equipos
+simultáneos de la cuenta** — mismo campo, mismo nombre, en la misma respuesta de
+`client-policy`. Sigue siendo puramente informativo para el cliente (no tienen que
+hacer nada con él salvo mostrarlo si algún día quieren).
+
+**¿Tabla nueva o extienden lo que ya existe?** Extendimos lo que ya existía, sin tabla
+nueva: `plan_modules.max_streams` / `customer_modules.max_streams` ahora representan el
+cupo de la cuenta, y `device_screen_cam_settings.enabled` pasó a significar "el cliente
+activó ScreenCam en este equipo puntual" (antes era un override administrativo que pisaba
+al resto de la jerarquía; ahora es la selección del cliente, y solo tiene efecto si la
+cuenta tiene el módulo disponible — ver 12.2). No hay campos nuevos en la respuesta de
+`client-policy`, es el mismo shape de la sección 11.1.
+
+**¿Panel del cliente, superficie nueva o vista dentro del admin?** Superficie nueva,
+autenticada igual que `/api/membership/status` (Bearer del usuario logueado, no admin).
+Ya está la API lista, sin pantalla todavía:
+
+```
+GET  /api/screen-cam/devices                        -- lista sus equipos + cupos
+POST /api/screen-cam/devices/:rustdeskId/activate    -- activa (valida cupo)
+POST /api/screen-cam/devices/:rustdeskId/deactivate  -- libera el cupo
+```
+
+`GET /api/screen-cam/devices`:
+
+```json
+{
+  "module": { "available": true, "max_slots": 2, "used_slots": 1 },
+  "devices": [
+    {
+      "rustdesk_id": "123456789",
+      "alias": "PC Recepción",
+      "hostname": "DESKTOP-ABC123",
+      "os": "Windows 11",
+      "active": true,
+      "actual_state": "running",
+      "encoder": "h264_nvenc",
+      "last_error": null,
+      "rtsp_clients": 1,
+      "rtsp_url": "rtsp://192.168.1.50:8554/live/main",
+      "last_report_at": "2026-07-27T12:00:00.000Z"
+    }
+  ]
+}
+```
+
+`POST .../activate` responde `409 {"error": "Ya usaste los 2 cupo(s)..."}` si no hay
+cupo libre, `403` si el plan no incluye el módulo, `404` si el equipo no es de esa
+cuenta. Validación de cupo atómica (transacción), no hay condición de carrera entre dos
+activaciones simultáneas.
+
+### 12.2 Cómo queda la jerarquía con el modelo de cupos
+
+`licensed` para un equipo puntual ahora es **todo esto a la vez**, no "el más
+específico pisa":
+
+1. Cuenta activa (no suspendida, plan no vencido) — si no, `licensed: false` en todos
+   los equipos sin importar nada más. Esto es lo que ya prueban ustedes con "supervisión
+   permanente" y confirma el punto que mencionan: vencimiento/suspensión gana siempre.
+2. Módulo disponible para la cuenta (`customer_modules.enabled` si existe, si no
+   `plan_modules.enabled`).
+3. El cliente activó **ese equipo puntual** (`device_screen_cam_settings.enabled`) —
+   dentro del cupo, validado en el momento de activar.
+
+El admin sigue teniendo autoridad final vía los endpoints de la sección 11.3
+(`PUT /admin/devices/:rustdeskId/screen-cam`): puede forzar apagado de un equipo puntual
+sin pasar por el flujo de cupos del cliente (para soporte/incumplimiento), y
+`PUT /admin/users/:id/screen-cam` para activar/desactivar el módulo a nivel cuenta.
+Agregamos `GET /admin/users/:id/screen-cam` con el mismo shape que verá el cliente, para
+que el admin vea exactamente lo que el cliente ve.
+
+### 12.3 Dirección RTSP en el heartbeat — campo confirmado
+
+Optamos por **`local_ip` + `rtsp_port` separados**, no una URL ya armada:
+
+```json
+{
+  "id": "123456789",
+  "screen_cam": {
+    "actual_state": "running",
+    "encoder": "h264_nvenc",
+    "rtsp_clients": 1,
+    "local_ip": "192.168.1.50",
+    "rtsp_port": 8554
+  }
+}
+```
+
+Motivo: mismo criterio que ya usan para `hostname`/`os` (campos separados, no
+compuestos) — el servidor arma `rtsp://{local_ip}:{rtsp_port}/live/main` para mostrarlo
+(ver `rtsp_url` en 12.1), así que si el formato de la ruta cambia en el futuro
+(`/live/sub`, autenticación embebida, etc.) no depende de que ustedes reconstruyan nada,
+solo de que sigan mandando los dos valores crudos.
+
+### 12.4 Resync de política al reconectar el WebSocket
+
+De su lado, sin nada que necesiten de nosotros — el evento `screen_cam.update` ya se
+empuja en cualquier cambio de plan/cliente/dispositivo (sección 11.3), así que en cuanto
+reconecten y vuelvan a suscribirse van a recibir el estado vigente en el próximo cambio.
+Si quieren el estado **actual** inmediatamente al reconectar (no solo el próximo cambio),
+la única opción hoy es volver a pedir `GET /api/client-policy?id=X` al reconectar el WS
+— no hace falta que agreguemos nada nuevo para eso, ya sirve.
+
+Implementación de referencia: `src/screenCamPolicy.js` (`getModuleAvailability`,
+`activateDevice`, `deactivateDevice`, `listDevicesForCustomer`) y
+`src/routes/clientExtensions.js` (`/api/screen-cam/*`) del repo `rustdesk-admin-panel`.

@@ -119,4 +119,36 @@ router.post('/messages/:id/ack', requireBearerAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Panel del cliente para ScreenCam (docs/CLIENT_INTEGRATION.md seccion 12):
+// el usuario final ve sus equipos y elige en cuales gastar el cupo que le
+// dio su plan. Sin pantalla propia todavia (solo API), pero es lo que va a
+// consumir esa pantalla cuando se construya.
+router.get('/screen-cam/devices', requireBearerAuth, (req, res) => {
+  res.json(screenCamPolicy.listDevicesForCustomer(req.user.sub));
+});
+
+function handleModuleError(res, e) {
+  const statusByCode = { NOT_FOUND: 404, NOT_LICENSED: 403, QUOTA_EXCEEDED: 409 };
+  const status = statusByCode[e.code] || 400;
+  res.status(status).json({ error: e.message });
+}
+
+router.post('/screen-cam/devices/:rustdeskId/activate', requireBearerAuth, (req, res) => {
+  try {
+    screenCamPolicy.activateDevice(req.user.sub, String(req.params.rustdeskId));
+    res.json({ ok: true });
+  } catch (e) {
+    handleModuleError(res, e);
+  }
+});
+
+router.post('/screen-cam/devices/:rustdeskId/deactivate', requireBearerAuth, (req, res) => {
+  try {
+    screenCamPolicy.deactivateDevice(req.user.sub, String(req.params.rustdeskId));
+    res.json({ ok: true });
+  } catch (e) {
+    handleModuleError(res, e);
+  }
+});
+
 module.exports = router;

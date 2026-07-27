@@ -281,4 +281,10 @@ db.exec(`
   );
 `);
 
+// Direccion RTSP local reportada por heartbeat (ver docs/CLIENT_INTEGRATION.md
+// seccion 12.1): separado en ip/puerto en vez de una url ya armada, para que
+// el servidor decida el formato de presentacion sin parsear nada del cliente.
+addColumnIfMissing('device_screen_cam_settings', 'local_ip', 'varchar(50)');
+addColumnIfMissing('device_screen_cam_settings', 'rtsp_port', 'integer');
+
 module.exports = db;

@@ -307,11 +307,19 @@ router.post('/heartbeat', (req, res) => {
     `).run(id);
 
     if (screenCam && typeof screenCam === 'object') {
+      const localIp = typeof screenCam.local_ip === 'string' && /^[0-9a-fA-F:.]{2,45}$/.test(screenCam.local_ip.trim())
+        ? screenCam.local_ip.trim()
+        : null;
+      const rtspPort = Number.isInteger(screenCam.rtsp_port) && screenCam.rtsp_port > 0 && screenCam.rtsp_port < 65536
+        ? screenCam.rtsp_port
+        : null;
       screenCamPolicy.reportDeviceState(id, {
         actualState: typeof screenCam.actual_state === 'string' ? screenCam.actual_state.slice(0, 20) : null,
         encoder: typeof screenCam.encoder === 'string' ? screenCam.encoder.slice(0, 50) : null,
         lastError: typeof screenCam.last_error === 'string' ? screenCam.last_error.slice(0, 300) : null,
         rtspClients: Number.isInteger(screenCam.rtsp_clients) ? screenCam.rtsp_clients : null,
+        localIp,
+        rtspPort,
       });
     }
   }

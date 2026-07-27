@@ -387,6 +387,15 @@ router.put('/plans/:id/screen-cam', (req, res) => {
   res.json({ ok: true });
 });
 
+// Vista admin del resumen de cupos y equipos de una cuenta -- mismo shape
+// que consumira el futuro panel del cliente (GET /api/screen-cam/devices),
+// para que el admin pueda ver exactamente lo que ve el cliente.
+router.get('/users/:id/screen-cam', (req, res) => {
+  const user = db.prepare('select id from users where id = ?').get(req.params.id);
+  if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+  res.json(screenCamPolicy.listDevicesForCustomer(user.id));
+});
+
 router.put('/users/:id/screen-cam', (req, res) => {
   const user = db.prepare('select id from users where id = ?').get(req.params.id);
   if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
@@ -406,7 +415,7 @@ router.get('/devices/:rustdeskId/screen-cam', (req, res) => {
   if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
   res.json({
     policy: screenCamPolicy.resolvePolicy(device.owner_user_id, rustdeskId),
-    reported: db.prepare('select actual_state, encoder, last_error, rtsp_clients, last_report_at from device_screen_cam_settings where rustdesk_id = ?').get(rustdeskId) || null,
+    reported: db.prepare('select actual_state, encoder, last_error, rtsp_clients, local_ip, rtsp_port, last_report_at from device_screen_cam_settings where rustdesk_id = ?').get(rustdeskId) || null,
   });
 });
 
