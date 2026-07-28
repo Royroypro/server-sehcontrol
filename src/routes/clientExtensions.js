@@ -4,7 +4,7 @@
 const express = require('express');
 const db = require('../db/adminDb');
 const { requireBearerAuth } = require('../auth');
-const { isUserBlocked } = require('../membershipSync');
+const membershipSync = require('../membershipSync');
 const { formatCurrency } = require('../format');
 const rustdeskKey = require('../rustdeskKey');
 const deviceClaim = require('../deviceClaim');
@@ -59,21 +59,11 @@ router.get('/membership/status', requireBearerAuth, (req, res) => {
   if (!user) return res.status(401).json({ error: 'Usuario no encontrado' });
 
   const deviceCount = db.prepare('select count(*) c from devices where owner_user_id = ?').get(user.id).c;
-  const blocked = isUserBlocked(user);
-  let reason = null;
-  let message = 'Cuenta activa';
-  if (user.status !== 'active') {
-    reason = 'suspended';
-    message = 'Tu cuenta esta suspendida. Contacta al administrador.';
-  } else if (blocked) {
-    reason = 'expired';
-    message = 'Tu plan ha vencido. Contacta al administrador.';
-  }
-
-  let daysLeft = null;
-  if (user.plan_expires_at) {
-    daysLeft = Math.ceil((new Date(user.plan_expires_at) - new Date()) / 86400000);
-  }
+  // Misma logica que el push por WebSocket (membershipSync.membershipStatus)
+  // -- una sola fuente de verdad para blocked/reason/message/days_left,
+  // incluye el caso "vence pronto" (reason: "expiring_soon") que antes
+  // solo devolvia "Cuenta activa" sin avisar nada hasta el bloqueo real.
+  const { blocked, reason, message, daysLeft } = membershipSync.membershipStatus(user);
 
   // plan_amount = precio del plan vigente (lo que cuesta la membresia que
   // tiene ahora), separado de last_payment = el ultimo pago que realmente

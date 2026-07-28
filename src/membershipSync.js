@@ -12,44 +12,84 @@ function isUserBlocked(user) {
   return false;
 }
 
-// Payload liviano para el push por websocket. Si el cliente quiere el detalle
-// completo (plan, dias restantes, limite de equipos) puede pedirlo con
-// GET /api/membership/status apenas reciba este evento.
-function statusPushPayload(user, blocked) {
+// Umbral fijo (independiente de expiry_warning_days, que solo controla
+// cuantos avisos automaticos genera el cron) para decidir cuando el
+// cliente debe mostrar el banner "tu plan vence pronto" en vivo. El cliente
+// ya documento este mismo numero (7) de su lado.
+const EXPIRING_SOON_THRESHOLD_DAYS = 7;
+
+function daysLeftFor(user) {
+  if (!user?.plan_expires_at) return null;
+  return Math.ceil((new Date(user.plan_expires_at) - new Date()) / 86400000);
+}
+
+// Estado de membresia compartido entre GET /api/membership/status (poll) y
+// el push por WebSocket (tiempo real) -- una sola fuente de verdad para que
+// nunca diverjan blocked/reason/message entre los dos canales.
+function membershipStatus(user, blocked = isUserBlocked(user)) {
+  const daysLeft = daysLeftFor(user);
   let reason = null;
-  if (user.status !== 'active') reason = 'suspended';
-  else if (blocked) reason = 'expired';
+  let message = 'Cuenta activa';
+  if (user.status !== 'active') {
+    reason = 'suspended';
+    message = 'Tu cuenta esta suspendida. Contacta al administrador.';
+  } else if (blocked) {
+    reason = 'expired';
+    message = 'Tu plan ha vencido. Contacta al administrador.';
+  } else if (daysLeft != null && daysLeft <= EXPIRING_SOON_THRESHOLD_DAYS) {
+    reason = 'expiring_soon';
+    message = daysLeft <= 0
+      ? 'Tu licencia vence hoy. Actualiza tu cuenta.'
+      : `Falta${daysLeft === 1 ? '' : 'n'} ${daysLeft} dia${daysLeft === 1 ? '' : 's'} para el termino de tu licencia. Actualiza tu cuenta.`;
+  }
+  return { blocked, reason, message, daysLeft };
+}
+
+// Payload para el push por websocket. Incluye days_left/plan_expires_at (no
+// solo blocked/reason/message) para que el cliente pueda actualizar el
+// banner con el push solo, sin depender de un GET de seguimiento -- aunque
+// GET /api/membership/status sigue disponible para el detalle completo
+// (plan, limite de equipos, ultimo pago).
+function statusPushPayload(user, blocked) {
+  const status = membershipStatus(user, blocked);
   return {
     type: 'membership_status',
     data: {
-      blocked,
-      reason,
-      message: reason === 'suspended'
-        ? 'Tu cuenta esta suspendida. Contacta al administrador.'
-        : reason === 'expired'
-          ? 'Tu plan ha vencido. Contacta al administrador.'
-          : 'Cuenta activa',
+      blocked: status.blocked,
+      reason: status.reason,
+      message: status.message,
+      days_left: status.daysLeft,
+      plan_expires_at: user.plan_expires_at || null,
     },
   };
 }
 
+// El bloqueo real (peer.status en hbbs) y el aviso al cliente (WS) son dos
+// cosas independientes -- antes, si hbbsDb no estaba disponible (deployment
+// sin esa base montada), el push tampoco se mandaba, dejando al cliente sin
+// enterarse de renovaciones/cambios en tiempo real aunque no dependiera de
+// hbbs para nada. Ahora el push siempre se manda; solo el paso de
+// hbbs.setPeerDisabled se salta si esa base no esta disponible.
 function syncUserDevices(userId) {
-  if (!hbbsDb.isAvailable()) return;
   const user = db.prepare('select * from users where id = ?').get(userId);
   if (!user) return;
   const blocked = isUserBlocked(user);
-  const devices = db.prepare('select rustdesk_id from devices where owner_user_id = ?').all(userId);
-  for (const d of devices) {
-    hbbsDb.setPeerDisabled(d.rustdesk_id, blocked);
+  if (hbbsDb.isAvailable()) {
+    const devices = db.prepare('select rustdesk_id from devices where owner_user_id = ?').all(userId);
+    for (const d of devices) {
+      hbbsDb.setPeerDisabled(d.rustdesk_id, blocked);
+    }
   }
   ws.pushToUser(userId, statusPushPayload(user, blocked));
 }
 
 function syncDevice(rustdeskId, userId) {
-  if (!hbbsDb.isAvailable()) return;
   const user = db.prepare('select * from users where id = ?').get(userId);
+  if (!user) return;
   const blocked = isUserBlocked(user);
-  hbbsDb.setPeerDisabled(rustdeskId, blocked);
+  if (hbbsDb.isAvailable()) {
+    hbbsDb.setPeerDisabled(rustdeskId, blocked);
+  }
   ws.pushToUser(userId, statusPushPayload(user, blocked));
 }
 
@@ -84,4 +124,4 @@ function startPeriodicSync(intervalMs = 5 * 60 * 1000) {
   setInterval(syncAll, intervalMs);
 }
 
-module.exports = { isUserBlocked, syncUserDevices, syncDevice, syncAll, startPeriodicSync };
+module.exports = { isUserBlocked, membershipStatus, syncUserDevices, syncDevice, syncAll, startPeriodicSync };
