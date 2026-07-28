@@ -919,3 +919,33 @@ la única opción hoy es volver a pedir `GET /api/client-policy?id=X` al reconec
 Implementación de referencia: `src/screenCamPolicy.js` (`getModuleAvailability`,
 `activateDevice`, `deactivateDevice`, `listDevicesForCustomer`) y
 `src/routes/clientExtensions.js` (`/api/screen-cam/*`) del repo `rustdesk-admin-panel`.
+
+---
+
+## 13. Nuevo campo: `whatsapp_number` en `client-policy` (27/07)
+
+Respuesta al pedido de sacar el número de WhatsApp del banner de vencimiento y del
+enlace de Soporte del cliente hardcodeado.
+
+`GET /api/client-policy` ahora incluye:
+
+```json
+{
+  "force_login": true,
+  "server_key": { "...": "..." },
+  "whatsapp_number": "51948793154",
+  "screen_cam": { "...": "..." }
+}
+```
+
+- Ya solo dígitos, sin `+` — armar el link como `https://wa.me/{whatsapp_number}` tal
+  cual pidieron.
+- Valor único a nivel instancia del panel (no depende de cuenta ni plan), configurable
+  en el panel admin: **Configuración → Datos de la plataforma → "WhatsApp para ventas"**.
+- Si el admin no lo configuró, o lo borra, viene `null` — tratarlo como "ocultar el
+  botón", ya que así lo pidieron.
+- Se normaliza del lado servidor (se le quitan `+`, espacios, guiones, etc. a lo que
+  cargue el admin), así que no hace falta validar el formato del lado cliente.
+
+Implementación de referencia: `getWhatsappNumber()` en `src/routes/clientExtensions.js`
+del repo `rustdesk-admin-panel`.

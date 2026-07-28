@@ -23,6 +23,16 @@ const router = express.Router();
 // usuario cierre sesion o no la haya iniciado todavia en este arranque. Sin
 // `id`, o si el equipo no esta reclamado por ninguna cuenta, se devuelve la
 // politica por defecto (no licenciado).
+// Numero de WhatsApp de soporte, configurable en el panel (Configuracion ->
+// "Datos de la plataforma" -> WhatsApp para ventas). Valor unico a nivel
+// instancia, no depende de cuenta ni plan. Se normaliza a solo digitos
+// (sin "+") porque el cliente arma el link como https://wa.me/{numero}.
+function getWhatsappNumber() {
+  const row = db.prepare('select whatsapp_number from platform_settings where id = 1').get();
+  const digits = String(row?.whatsapp_number || '').replace(/\D/g, '');
+  return digits || null;
+}
+
 router.get('/client-policy', (req, res) => {
   try {
     const rustdeskId = typeof req.query.id === 'string' ? req.query.id.trim().slice(0, 100) : null;
@@ -30,6 +40,7 @@ router.get('/client-policy', (req, res) => {
     res.set('Cache-Control', 'no-store').json({
       force_login: (process.env.FORCE_LOGIN || 'true') === 'true',
       server_key: rustdeskKey.getPublicKeyInfo(),
+      whatsapp_number: getWhatsappNumber(),
       screen_cam: screenCamPolicy.resolvePolicy(owner?.owner_user_id, rustdeskId),
     });
   } catch (e) {
