@@ -445,11 +445,20 @@ async function loadAccountScreenCam(ownerId) {
     const cell = row.querySelector('.sc-cell');
     if (!cell) return;
     if (!d) { cell.textContent = '-'; return; }
+    const smallBtn = 'style="margin-top:4px;margin-right:4px;font-size:11px;padding:3px 8px;"';
     cell.innerHTML = `
       ${d.active ? '<span class="badge active">Activo</span>' : '<span class="badge">Inactivo</span>'}
+      ${d.auth_mismatch ? '<span class="badge suspended" title="El panel emitio credenciales pero el equipo reporta el stream sin autenticacion">Auth sin aplicar</span>' : ''}
       ${d.last_error ? `<br><span style="color:var(--danger);font-size:11px;">${d.last_error}</span>` : ''}
       ${d.rtsp_url ? `<br><span style="font-size:11px;color:var(--muted);">${d.rtsp_url}</span>` : ''}
-      <br><button class="secondary" style="margin-top:4px;font-size:11px;padding:3px 8px;" onclick="toggleDeviceScreenCamInline('${d.rustdesk_id}', ${!d.active}, ${ownerId})">${d.active ? 'Apagar' : 'Encender'}</button>
+      ${d.rtsp_user ? `
+        <br><span style="font-size:11px;color:var(--muted);">usuario: <code>${d.rtsp_user}</code></span>
+        <button type="button" class="secondary" ${smallBtn} onclick="copyScreenCamText('${d.rtsp_user}:${d.rtsp_password}')" title="Copiar usuario:contrasena">Copiar credenciales</button>
+      ` : ''}
+      <br>
+      <button class="secondary" ${smallBtn} onclick="toggleDeviceScreenCamInline('${d.rustdesk_id}', ${!d.active}, ${ownerId})">${d.active ? 'Apagar' : 'Encender'}</button>
+      ${d.active ? `<button class="secondary" ${smallBtn} onclick="regenerateScreenCamCredentials('${d.rustdesk_id}', ${ownerId})">Regenerar credenciales</button>` : ''}
+      ${d.rtsp_user ? `<button class="secondary" ${smallBtn} onclick="clearScreenCamCredentials('${d.rustdesk_id}', ${ownerId})">Quitar auth</button>` : ''}
     `;
   });
 }
@@ -480,6 +489,30 @@ async function toggleDeviceScreenCamInline(rustdeskId, enable, ownerId) {
   } catch (e) {
     alert(e.message);
   }
+}
+
+async function regenerateScreenCamCredentials(rustdeskId, ownerId) {
+  if (!confirm('¿Generar credenciales RTSP nuevas para este equipo? Las anteriores dejan de servir en cuanto el cliente vuelva a leer la politica.')) return;
+  try {
+    await api(`/api/admin/devices/${rustdeskId}/screen-cam/rtsp-credentials/regenerate`, { method: 'POST' });
+    loadAccountScreenCam(ownerId);
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+async function clearScreenCamCredentials(rustdeskId, ownerId) {
+  if (!confirm('¿Quitar la autenticacion RTSP de este equipo? El stream queda abierto en la red local hasta que se generen credenciales nuevas.')) return;
+  try {
+    await api(`/api/admin/devices/${rustdeskId}/screen-cam/rtsp-credentials`, { method: 'DELETE' });
+    loadAccountScreenCam(ownerId);
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+function copyScreenCamText(text) {
+  navigator.clipboard?.writeText(text).catch(() => {});
 }
 
 

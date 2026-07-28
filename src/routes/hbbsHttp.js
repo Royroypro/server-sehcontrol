@@ -320,6 +320,11 @@ router.post('/heartbeat', (req, res) => {
         rtspClients: Number.isInteger(screenCam.rtsp_clients) ? screenCam.rtsp_clients : null,
         localIp,
         rtspPort,
+        // Lo que el cliente aplico de verdad (credenciales RTSP), para que
+        // el panel pueda detectar si una desconfiguracion dejo el stream
+        // sin autenticacion pese a que se le mandaron credenciales.
+        authEnabled: typeof screenCam.auth_enabled === 'boolean' ? screenCam.auth_enabled : null,
+        reportedRtspUser: typeof screenCam.rtsp_user === 'string' ? screenCam.rtsp_user.slice(0, 50) : null,
       });
     }
   }

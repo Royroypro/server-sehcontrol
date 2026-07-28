@@ -290,5 +290,17 @@ db.exec(`
 // el servidor decida el formato de presentacion sin parsear nada del cliente.
 addColumnIfMissing('device_screen_cam_settings', 'local_ip', 'varchar(50)');
 addColumnIfMissing('device_screen_cam_settings', 'rtsp_port', 'integer');
+// Credenciales RTSP (Digest/Basic) por dispositivo -- el panel las genera y
+// las manda al cliente via client-policy/WS, nunca al reves. Guardadas en
+// texto plano: el cliente necesita el valor real para autenticar (no un
+// hash), y esta base ya no se expone fuera del servidor. Ver
+// docs/CLIENT_INTEGRATION.md seccion 14.
+addColumnIfMissing('device_screen_cam_settings', 'rtsp_user', 'varchar(50)');
+addColumnIfMissing('device_screen_cam_settings', 'rtsp_password', 'varchar(100)');
+// Lo que el cliente reporta que aplico de verdad (heartbeat), para que el
+// panel pueda detectar una desconfiguracion (el panel mando credenciales
+// pero el equipo sigue con el stream abierto).
+addColumnIfMissing('device_screen_cam_settings', 'reported_auth_enabled', 'tinyint');
+addColumnIfMissing('device_screen_cam_settings', 'reported_rtsp_user', 'varchar(50)');
 
 module.exports = db;

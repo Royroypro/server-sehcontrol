@@ -949,3 +949,98 @@ enlace de Soporte del cliente hardcodeado.
 
 Implementación de referencia: `getWhatsappNumber()` en `src/routes/clientExtensions.js`
 del repo `rustdesk-admin-panel`.
+
+---
+
+## 14. Credenciales RTSP (`rtsp_user` / `rtsp_password`) — implementado (28/07)
+
+Respuesta al pedido de autenticación RTSP (Digest MD5 + Basic, RFC 2617) para ScreenCam.
+Ya está implementado y desplegado, siguiendo exactamente las reglas que pidieron.
+
+### 14.1 Bloque `screen_cam` en `client-policy` y en el WebSocket
+
+`GET /api/client-policy?id=X` y el evento `screen_cam.update` (mismo `resolvePolicy()`
+del lado servidor, así que siempre van a estar sincronizados) ahora incluyen:
+
+```json
+{
+  "screen_cam": {
+    "licensed": true,
+    "desired_state": "running",
+    "mode": "managed",
+    "max_streams": 1,
+    "rtsp_user": "seh_a1b2c3",
+    "rtsp_password": "K7pQ2mVx9nR4"
+  }
+}
+```
+
+- **Por dispositivo**, como pidieron como opción ideal — cada `rustdesk_id` tiene su
+  propio par, generado independientemente.
+- Generación: `seh_` + 6 hex aleatorios para el usuario, 12 caracteres alfanuméricos
+  (`A-Za-z0-9`, sin `:`, espacios ni comillas) para la contraseña — usando
+  `crypto.randomBytes`, no `Math.random`.
+- **Se generan solas la primera vez que un equipo se activa** (ya sea el cliente final
+  desde su panel dentro de su cupo, o el admin forzando el encendido) — un equipo recién
+  licenciado nunca queda con el stream abierto por descuido. Reactivar un equipo ya
+  activo **no** regenera las credenciales existentes.
+- **Ausente/`null`** si el equipo no está licenciado, o si nunca se activó (nunca se
+  generaron). Lo tratan como pidieron: sin autenticación.
+- **Borrarlas apaga la autenticación de verdad** — hay un botón "Quitar auth" en el
+  panel (admin y cliente final) que pone ambos campos en `null` explícito, no dejamos
+  el último par "colgado" en la respuesta.
+- **Rotación**: el admin tiene un botón "Regenerar credenciales" que fuerza un par
+  nuevo (pisa el anterior). Se empuja por WebSocket al instante del cambio, igual que
+  cualquier otro cambio de `screen_cam`.
+
+### 14.2 Reporte en el heartbeat
+
+`POST /api/heartbeat` acepta dos campos nuevos, opcionales, dentro del mismo objeto
+`screen_cam` que ya mandan:
+
+```json
+{
+  "id": "123456789",
+  "screen_cam": {
+    "actual_state": "running",
+    "encoder": "h264_nvenc",
+    "rtsp_clients": 1,
+    "local_ip": "192.168.0.3",
+    "rtsp_port": 8554,
+    "auth_enabled": true,
+    "rtsp_user": "seh_a1b2c3"
+  }
+}
+```
+
+- `auth_enabled` (bool): si el equipo tiene autenticación realmente aplicada ahora
+  mismo.
+- `rtsp_user`: solo el usuario, para confirmar cuál par aplicó — nunca mandan la
+  contraseña de vuelta, como corresponde.
+- El panel usa esto para detectar desconfiguración: si hay credenciales generadas para
+  un equipo activo pero el heartbeat reporta `auth_enabled: false`, se muestra un badge
+  **"Auth sin aplicar"** tanto en el detalle del equipo (admin) como en el panel del
+  cliente final, para que quede visible sin tener que ir a revisar logs.
+
+### 14.3 Dónde se gestiona en el panel
+
+- **Admin**: pestaña Equipos → tarjeta de la cuenta expandida → por cada equipo activo,
+  se ve el usuario (con botón "Copiar credenciales"), el badge de desconfiguración si
+  aplica, y botones **"Regenerar credenciales"** / **"Quitar auth"**.
+- **Cliente final**: pestaña ScreenCam → columna "Credenciales" con usuario + botón
+  copiar por cada equipo activo. El cliente final puede ver y copiar, pero no
+  regenerar ni quitar — eso queda como acción exclusiva del admin, tal como pidieron
+  ("el cliente no las inventa ni permite editarlas localmente").
+
+### 14.4 Sobre ONVIF sin autenticación
+
+Tomamos nota de que lo dejaron así a propósito (para no arriesgar el auto-descubrimiento
+de NVR) y que agregar WS-Security más adelante reutilizaría este mismo par de
+credenciales sin campos nuevos de nuestro lado — no hace falta que hagamos nada
+ahora para eso, quedamos atentos para cuando lo definan.
+
+Implementación de referencia: `src/screenCamPolicy.js` (`generateRtspCredentials`,
+`ensureRtspCredentials`, `regenerateRtspCredentials`, `clearRtspCredentials`),
+`src/routes/hbbsHttp.js` (parseo de `auth_enabled`/`rtsp_user` en `/heartbeat`) y
+`src/routes/admin.js` (endpoints `/screen-cam/rtsp-credentials/*`) del repo
+`rustdesk-admin-panel`.

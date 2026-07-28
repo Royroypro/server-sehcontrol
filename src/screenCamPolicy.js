@@ -11,13 +11,17 @@
 // licensed = cuenta activa (membresia no vencida/suspendida) AND modulo
 // disponible para la cuenta (plan o override de cliente) AND el cliente
 // activo este equipo puntual dentro de su cupo.
+const crypto = require('crypto');
 const db = require('./db/adminDb');
 const notifications = require('./notifications');
 const membershipSync = require('./membershipSync');
 const ws = require('./ws');
 
 const MODULE = 'screen_cam';
-const DEFAULT_POLICY = { licensed: false, desired_state: 'stopped', mode: 'local', max_streams: 0 };
+const DEFAULT_POLICY = {
+  licensed: false, desired_state: 'stopped', mode: 'local', max_streams: 0,
+  rtsp_user: null, rtsp_password: null,
+};
 
 function getPlanModule(planId) {
   if (!planId) return null;
@@ -30,6 +34,62 @@ function getCustomerModule(userId) {
 
 function getDeviceSettings(rustdeskId) {
   return db.prepare('select * from device_screen_cam_settings where rustdesk_id = ?').get(rustdeskId);
+}
+
+// "seh_" + 6 hex (ej. seh_a1b2c3) y una password alfanumerica de 12 -- sin
+// ":" (rompe el split de Basic auth), sin espacios ni comillas, por pedido
+// explicito del cliente.
+const PASSWORD_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+function generateRtspCredentials() {
+  const user = `seh_${crypto.randomBytes(3).toString('hex')}`;
+  let password = '';
+  for (const byte of crypto.randomBytes(12)) password += PASSWORD_CHARSET[byte % PASSWORD_CHARSET.length];
+  return { rtspUser: user, rtspPassword: password };
+}
+
+// Genera credenciales solo si el equipo todavia no tiene -- se llama al
+// activar un equipo (nunca queda el stream abierto por default una vez
+// licenciado). No pisa credenciales existentes: eso es regenerateRtspCredentials.
+function ensureRtspCredentials(rustdeskId) {
+  const current = getDeviceSettings(rustdeskId);
+  if (current?.rtsp_user && current?.rtsp_password) return;
+  const { rtspUser, rtspPassword } = generateRtspCredentials();
+  db.prepare(`
+    insert into device_screen_cam_settings (rustdesk_id, rtsp_user, rtsp_password, updated_at)
+    values (?, ?, ?, datetime('now'))
+    on conflict(rustdesk_id) do update set
+      rtsp_user = coalesce(device_screen_cam_settings.rtsp_user, excluded.rtsp_user),
+      rtsp_password = coalesce(device_screen_cam_settings.rtsp_password, excluded.rtsp_password),
+      updated_at = datetime('now')
+  `).run(rustdeskId, rtspUser, rtspPassword);
+}
+
+// Fuerza un par nuevo, pisando el anterior -- accion explicita del admin
+// ("Regenerar credenciales"), ej. si un equipo se dio de baja/comprometio.
+function regenerateRtspCredentials(rustdeskId, actorUserId) {
+  const { rtspUser, rtspPassword } = generateRtspCredentials();
+  db.prepare(`
+    insert into device_screen_cam_settings (rustdesk_id, rtsp_user, rtsp_password, updated_at)
+    values (?, ?, ?, datetime('now'))
+    on conflict(rustdesk_id) do update set
+      rtsp_user = excluded.rtsp_user, rtsp_password = excluded.rtsp_password, updated_at = datetime('now')
+  `).run(rustdeskId, rtspUser, rtspPassword);
+  notifications.logActivity(actorUserId, 'screen_cam_rtsp_credentials_regenerated', 'device', rustdeskId, null);
+  const owner = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (owner) notifyUser(owner.owner_user_id, rustdeskId);
+  return { rtspUser, rtspPassword };
+}
+
+// Borrar las credenciales apaga la autenticacion de verdad (el cliente lo
+// interpreta como "sin auth", no se queda con el ultimo par recibido).
+function clearRtspCredentials(rustdeskId, actorUserId) {
+  db.prepare(`
+    update device_screen_cam_settings set rtsp_user = null, rtsp_password = null, updated_at = datetime('now')
+    where rustdesk_id = ?
+  `).run(rustdeskId);
+  notifications.logActivity(actorUserId, 'screen_cam_rtsp_credentials_cleared', 'device', rustdeskId, null);
+  const owner = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (owner) notifyUser(owner.owner_user_id, rustdeskId);
 }
 
 function countActiveDevices(userId) {
@@ -78,6 +138,10 @@ function resolvePolicy(userId, rustdeskId) {
     desired_state: desiredState,
     mode,
     max_streams: availability.max_slots,
+    // Ausente/null si el equipo no esta licenciado o todavia no se le
+    // generaron credenciales -- el cliente lo trata como "sin auth".
+    rtsp_user: licensed ? (deviceSettings?.rtsp_user || null) : null,
+    rtsp_password: licensed ? (deviceSettings?.rtsp_password || null) : null,
   };
 }
 
@@ -129,6 +193,9 @@ function setDeviceOverride(rustdeskId, { enabled, desiredState, mode, maxStreams
   );
   notifications.logActivity(actorUserId, 'screen_cam_device_override_updated', 'device', rustdeskId,
     JSON.stringify({ enabled, desired_state: desiredState, mode, max_streams: maxStreams }));
+  // Un equipo recien activado nunca queda con el stream RTSP abierto: se le
+  // generan credenciales la primera vez que se enciende, si no tenia.
+  if (enabled) ensureRtspCredentials(rustdeskId);
   const owner = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
   if (owner) notifyUser(owner.owner_user_id, rustdeskId);
 }
@@ -177,7 +244,8 @@ function listDevicesForCustomer(userId) {
   const rows = db.prepare(`
     select d.rustdesk_id, d.alias, s.hostname, s.os,
            cs.enabled, cs.desired_state, cs.mode, cs.actual_state, cs.encoder,
-           cs.last_error, cs.rtsp_clients, cs.local_ip, cs.rtsp_port, cs.last_report_at
+           cs.last_error, cs.rtsp_clients, cs.local_ip, cs.rtsp_port, cs.last_report_at,
+           cs.rtsp_user, cs.rtsp_password, cs.reported_auth_enabled, cs.reported_rtsp_user
     from devices d
     left join device_sysinfo s on s.rustdesk_id = d.rustdesk_id
     left join device_screen_cam_settings cs on cs.rustdesk_id = d.rustdesk_id
@@ -185,31 +253,49 @@ function listDevicesForCustomer(userId) {
     order by d.claimed_at desc
   `).all(userId);
 
-  const devices = rows.map((r) => ({
-    rustdesk_id: r.rustdesk_id,
-    alias: r.alias || null,
-    hostname: r.hostname || null,
-    os: r.os || null,
-    active: r.enabled === 1,
-    actual_state: r.actual_state || null,
-    encoder: r.encoder || null,
-    last_error: r.last_error || null,
-    rtsp_clients: r.rtsp_clients ?? null,
-    rtsp_url: (r.enabled === 1 && r.local_ip && r.rtsp_port) ? `rtsp://${r.local_ip}:${r.rtsp_port}/live/main` : null,
-    last_report_at: r.last_report_at || null,
-  }));
+  const devices = rows.map((r) => {
+    const active = r.enabled === 1;
+    const hasCredentials = !!(r.rtsp_user && r.rtsp_password);
+    // El panel emitio credenciales pero el equipo reporta el stream sin
+    // autenticacion -- desconfiguracion que conviene mostrarle al admin.
+    const authMismatch = active && hasCredentials && r.reported_auth_enabled === 0;
+    return {
+      rustdesk_id: r.rustdesk_id,
+      alias: r.alias || null,
+      hostname: r.hostname || null,
+      os: r.os || null,
+      active,
+      actual_state: r.actual_state || null,
+      encoder: r.encoder || null,
+      last_error: r.last_error || null,
+      rtsp_clients: r.rtsp_clients ?? null,
+      rtsp_url: (active && r.local_ip && r.rtsp_port) ? `rtsp://${r.local_ip}:${r.rtsp_port}/live/main` : null,
+      rtsp_user: r.rtsp_user || null,
+      rtsp_password: r.rtsp_password || null,
+      auth_enabled: r.reported_auth_enabled === 1,
+      auth_mismatch: authMismatch,
+      last_report_at: r.last_report_at || null,
+    };
+  });
 
   return { module: availability, devices };
 }
 
 // El cliente reporta su estado real via heartbeat (actual_state, encoder
-// usado, error si lo hay, cantidad de clientes RTSP conectados, y la
-// direccion local para armar la URL RTSP). No consume "licensed"/
-// "desired_state"/"enabled" -- eso lo define el servidor, no el cliente.
-function reportDeviceState(rustdeskId, { actualState, encoder, lastError, rtspClients, localIp, rtspPort }) {
+// usado, error si lo hay, cantidad de clientes RTSP conectados, la
+// direccion local para armar la URL RTSP, y si aplico autenticacion de
+// verdad). No consume "licensed"/"desired_state"/"enabled"/credenciales --
+// eso lo define el servidor, no el cliente.
+function reportDeviceState(rustdeskId, {
+  actualState, encoder, lastError, rtspClients, localIp, rtspPort, authEnabled, reportedRtspUser,
+}) {
+  const authEnabledValue = authEnabled == null ? null : (authEnabled ? 1 : 0);
   db.prepare(`
-    insert into device_screen_cam_settings (rustdesk_id, actual_state, encoder, last_error, rtsp_clients, local_ip, rtsp_port, last_report_at, updated_at)
-    values (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+    insert into device_screen_cam_settings (
+      rustdesk_id, actual_state, encoder, last_error, rtsp_clients, local_ip, rtsp_port,
+      reported_auth_enabled, reported_rtsp_user, last_report_at, updated_at
+    )
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     on conflict(rustdesk_id) do update set
       actual_state = coalesce(?, device_screen_cam_settings.actual_state),
       encoder = coalesce(?, device_screen_cam_settings.encoder),
@@ -217,11 +303,15 @@ function reportDeviceState(rustdeskId, { actualState, encoder, lastError, rtspCl
       rtsp_clients = coalesce(?, device_screen_cam_settings.rtsp_clients),
       local_ip = coalesce(?, device_screen_cam_settings.local_ip),
       rtsp_port = coalesce(?, device_screen_cam_settings.rtsp_port),
+      reported_auth_enabled = coalesce(?, device_screen_cam_settings.reported_auth_enabled),
+      reported_rtsp_user = coalesce(?, device_screen_cam_settings.reported_rtsp_user),
       last_report_at = datetime('now'),
       updated_at = datetime('now')
   `).run(
     rustdeskId, actualState || null, encoder || null, lastError || null, rtspClients ?? null, localIp || null, rtspPort ?? null,
+    authEnabledValue, reportedRtspUser || null,
     actualState || null, encoder || null, lastError || null, rtspClients ?? null, localIp || null, rtspPort ?? null,
+    authEnabledValue, reportedRtspUser || null,
   );
   if (lastError) {
     notifications.logActivity(null, 'screen_cam_error_reported', 'device', rustdeskId,
@@ -257,4 +347,6 @@ module.exports = {
   deactivateDevice,
   listDevicesForCustomer,
   reportDeviceState,
+  regenerateRtspCredentials,
+  clearRtspCredentials,
 };

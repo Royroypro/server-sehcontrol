@@ -433,8 +433,31 @@ router.get('/devices/:rustdeskId/screen-cam', (req, res) => {
   if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
   res.json({
     policy: screenCamPolicy.resolvePolicy(device.owner_user_id, rustdeskId),
-    reported: db.prepare('select actual_state, encoder, last_error, rtsp_clients, local_ip, rtsp_port, last_report_at from device_screen_cam_settings where rustdesk_id = ?').get(rustdeskId) || null,
+    reported: db.prepare(`
+      select actual_state, encoder, last_error, rtsp_clients, local_ip, rtsp_port,
+             reported_auth_enabled, reported_rtsp_user, last_report_at
+      from device_screen_cam_settings where rustdesk_id = ?
+    `).get(rustdeskId) || null,
   });
+});
+
+// Genera un par de credenciales RTSP nuevo, pisando el anterior si existia.
+router.post('/devices/:rustdeskId/screen-cam/rtsp-credentials/regenerate', (req, res) => {
+  const rustdeskId = String(req.params.rustdeskId);
+  const device = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
+  const { rtspUser, rtspPassword } = screenCamPolicy.regenerateRtspCredentials(rustdeskId, req.user.sub);
+  res.json({ rtsp_user: rtspUser, rtsp_password: rtspPassword });
+});
+
+// Apaga la autenticacion RTSP de ese equipo (el cliente deja el stream sin
+// credenciales en cuanto lea esto -- ver docs/CLIENT_INTEGRATION.md seccion 14).
+router.delete('/devices/:rustdeskId/screen-cam/rtsp-credentials', (req, res) => {
+  const rustdeskId = String(req.params.rustdeskId);
+  const device = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
+  screenCamPolicy.clearRtspCredentials(rustdeskId, req.user.sub);
+  res.json({ ok: true });
 });
 
 router.put('/devices/:rustdeskId/screen-cam', (req, res) => {
