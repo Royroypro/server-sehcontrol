@@ -1,4 +1,11 @@
-# Integración del cliente RustDesk con el panel de membresías
+# Integración del cliente Sehcontrol con el panel de membresías
+
+> Nota de nomenclatura: el cliente está personalizado como **Sehcontrol**. En este
+> documento "Sehcontrol" es siempre nuestro producto; las menciones a "RustDesk" que
+> quedan se refieren exclusivamente al proyecto original del que deriva (protocolo,
+> cliente stock sin parchar, `rustdesk-server`). Los identificadores técnicos
+> (`rustdesk_id`, `rustdesk_uuid`, columnas de la base) conservan su nombre a propósito:
+> son parte del contrato de la API y renombrarlos rompería a los clientes ya desplegados.
 
 Mensaje para quien vaya a tocar el fork del cliente (`rustdesk/rustdesk`, Flutter + Rust).
 Este documento describe qué implementar del lado del cliente para que la app:
@@ -35,7 +42,7 @@ Base URL: la que el usuario configura como **API Server** en el cliente (`Settin
 Durante `POST /api/login`, el servidor también registra la identidad del
 dispositivo enviada por Android:
 
-- `id` se usa como ID RustDesk y para asociar el dispositivo a la cuenta.
+- `id` se usa como ID Sehcontrol y para asociar el dispositivo a la cuenta.
 - `uuid` se conserva como identificador persistente adicional.
 - `deviceInfo.name` se guarda como `hostname`.
 - `deviceInfo.os` se guarda como `platform`.
@@ -109,7 +116,7 @@ política.
 > silenciosamente una clave guardada usando una respuesta HTTP no autenticada, porque un
 > atacante podría sustituir tanto el servidor como la clave. En una LAN confiable se puede
 > permitir el alta inicial por HTTP con confirmación visible del usuario. Guarda
-> `public_key` en la opción RustDesk `key`; usa `fingerprint_sha256` para detectar cambios.
+> `public_key` en la opción `key` del cliente; usa `fingerprint_sha256` para detectar cambios.
 > Cuando llegue `server_key_changed`, vuelve a consultar `/api/public/server-key`, valida
 > la confianza y aplica la clave antes de reconectar. El cliente oficial de RustDesk no
 > consume este endpoint: esta lógica debe agregarse al cliente personalizado.
@@ -445,7 +452,7 @@ conectarse, en vez de encontrarse un error genérico de conexión fallida.
 
 - [ ] `GET /api/client-policy` al arranque, antes de `runApp()` (o inmediatamente después si
       `dialogManager` lo requiere).
-- [ ] Validar y guardar `server_key.public_key` como opción RustDesk `key`; fijar la primera
+- [ ] Validar y guardar `server_key.public_key` como opción `key` del cliente; fijar la primera
       clave mediante HTTPS, clave incluida en la app o confirmación explícita del usuario.
 - [ ] Forzar `loginDialog()` en loop hasta login exitoso si `force_login == true` y no hay sesión.
 - [ ] Si no hay `api_server` configurado, no forzar nada (comportamiento actual sin cambios).
@@ -610,8 +617,8 @@ Implementación de referencia: `src/deviceClaim.js` (lógica compartida de recla
 Mensaje para quien toque el fork del cliente, tanto en Android (Kotlin/Rust) como en
 desktop (Windows/Linux/macOS, Flutter + Rust):
 
-**El problema que resuelve:** hoy, si un usuario desinstala RustDesk y borra los datos
-locales, al reinstalar el cliente genera un `id` de RustDesk completamente nuevo. El
+**El problema que resuelve:** hoy, si un usuario desinstala Sehcontrol y borra los datos
+locales, al reinstalar el cliente genera un `id` de Sehcontrol completamente nuevo. El
 servidor no tiene forma de saber que es la misma máquina física, así que la trata como un
 equipo nuevo: el registro anterior queda huérfano/obsoleto y, si el plan tiene cupo
 limitado, puede incluso rechazar el reingreso por "límite de equipos alcanzado" cuando en
