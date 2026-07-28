@@ -128,27 +128,62 @@ async function renderScreenCam() {
     <tbody id="scDevicesBody"></tbody></table>
   `;
   const body = document.getElementById('scDevicesBody');
-  body.innerHTML = data.devices.length ? data.devices.map((d) => `
+  body.innerHTML = data.devices.length ? data.devices.map((d) => {
+    SCREEN_CAM_CACHE[d.rustdesk_id] = d;
+    return `
     <tr>
       <td>${d.alias || d.hostname || d.rustdesk_id}<br><span style="font-size:11px;color:var(--muted)">${d.rustdesk_id}</span></td>
       <td>${d.active ? '<span class="badge active">Activo</span>' : '<span class="badge">Inactivo</span>'}</td>
       <td>${d.actual_state || '-'}${d.last_error ? `<br><span style="color:var(--danger);font-size:11px;">${d.last_error}</span>` : ''}
         ${d.auth_mismatch ? '<br><span class="badge suspended" title="El panel emitio credenciales pero el equipo todavia no las aplico">Auth sin aplicar</span>' : ''}</td>
       <td>${d.rtsp_url ? `<code style="font-size:11px;">${d.rtsp_url}</code>` : '-'}</td>
-      <td>${d.rtsp_user ? `
-        <code style="font-size:11px;">${d.rtsp_user}</code>
-        <button type="button" class="secondary" style="font-size:11px;padding:3px 8px;" onclick="copyScreenCamText('${d.rtsp_user}:${d.rtsp_password}')">Copiar</button>
-      ` : '-'}</td>
+      <td>${d.rtsp_user ? `<button type="button" class="secondary" style="font-size:11px;padding:3px 8px;" onclick="showScreenCamCredentials('${d.rustdesk_id}')">Ver credenciales</button>` : '-'}</td>
       <td class="row-actions">
         ${d.active
           ? `<button class="danger" onclick="toggleMyScreenCam('${d.rustdesk_id}', false)">Desactivar</button>`
           : `<button onclick="toggleMyScreenCam('${d.rustdesk_id}', true)" ${m.used_slots >= m.max_slots ? 'disabled title="Sin cupos disponibles"' : ''}>Activar</button>`}
       </td>
-    </tr>`).join('') : '<tr><td colspan="6" class="empty">No tienes equipos asignados todavia</td></tr>';
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="empty">No tienes equipos asignados todavia</td></tr>';
 }
 
 function copyScreenCamText(text) {
   navigator.clipboard?.writeText(text).catch(() => {});
+}
+
+// Cache de la ultima respuesta de screen-cam por rustdesk_id (ver mismo
+// patron en public/admin/index.html).
+const SCREEN_CAM_CACHE = {};
+
+// Muchos DVR/NVR se configuran desde su propia pantalla, sin portapapeles
+// disponible -- hace falta poder LEER las credenciales en texto grande
+// para tipearlas a mano, no solo copiarlas.
+function showScreenCamCredentials(rustdeskId) {
+  const d = SCREEN_CAM_CACHE[rustdeskId];
+  if (!d) return;
+  const fullUrl = d.rtsp_url
+    ? d.rtsp_url.replace('rtsp://', `rtsp://${d.rtsp_user}:${d.rtsp_password}@`)
+    : null;
+  const div = document.createElement('div');
+  div.className = 'modal-backdrop';
+  div.innerHTML = `
+    <div class="card modal" style="width:480px;max-width:90vw;">
+      <h2>Credenciales RTSP</h2>
+      <p style="font-size:12px;color:var(--muted);margin-top:-8px;">${d.alias || d.rustdesk_id}</p>
+      <label>Usuario</label>
+      <div style="font-size:20px;font-family:monospace;padding:10px;border:1px solid var(--border);border-radius:6px;user-select:all;">${d.rtsp_user}</div>
+      <label>Contraseña</label>
+      <div style="font-size:20px;font-family:monospace;padding:10px;border:1px solid var(--border);border-radius:6px;user-select:all;">${d.rtsp_password}</div>
+      ${fullUrl ? `
+      <label>URL completa (con credenciales)</label>
+      <div style="font-size:13px;font-family:monospace;padding:10px;border:1px solid var(--border);border-radius:6px;user-select:all;word-break:break-all;">${fullUrl}</div>
+      ` : ''}
+      <div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="secondary" onclick="copyScreenCamText('${d.rtsp_user}:${d.rtsp_password}')">Copiar usuario:contraseña</button>
+        <button type="button" onclick="document.querySelector('.modal-backdrop').remove()">Cerrar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
 }
 
 async function toggleMyScreenCam(rustdeskId, activate) {
