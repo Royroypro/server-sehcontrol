@@ -455,10 +455,12 @@ async function loadAccountScreenCam(ownerId) {
       ${d.rtsp_user ? `
         <br><button type="button" class="secondary" ${smallBtn} onclick="showScreenCamCredentials('${d.rustdesk_id}')">Ver credenciales</button>
       ` : ''}
+      ${renderDisplayControls(d, ownerId)}
       <br>
       <button class="secondary" ${smallBtn} onclick="toggleDeviceScreenCamInline('${d.rustdesk_id}', ${!d.active}, ${ownerId})">${d.active ? 'Apagar' : 'Encender'}</button>
       ${d.active ? `<button class="secondary" ${smallBtn} onclick="regenerateScreenCamCredentials('${d.rustdesk_id}', ${ownerId})">Regenerar credenciales</button>` : ''}
       ${d.rtsp_user ? `<button class="secondary" ${smallBtn} onclick="clearScreenCamCredentials('${d.rustdesk_id}', ${ownerId})">Quitar auth</button>` : ''}
+      ${d.active ? `<button class="secondary" ${smallBtn} onclick="openScreenCamPreview('${d.rustdesk_id}')">Ver previsualizacion</button>` : ''}
     `;
   });
 }
@@ -519,6 +521,152 @@ function copyScreenCamText(text) {
 // modal de "Ver credenciales" no dependa de re-parsear el HTML de la fila
 // (y evita meter la contrasena real dentro de un atributo onclick).
 const SCREEN_CAM_CACHE = {};
+
+// ---------- Seleccion remota de pantalla ----------
+function renderDisplayControls(d, ownerId) {
+  const st = d.displays;
+  if (!d.active) return '';
+  if (!st || !st.supports_display_selection) {
+    return '<br><span style="font-size:11px;color:var(--muted);">Este cliente todavia no admite seleccion remota de pantalla.</span>';
+  }
+  const options = st.displays.map((s) => {
+    const label = `${s.name || s.display_id}${s.width && s.height ? ` — ${s.width}×${s.height}` : ''}${s.connected === false ? ' (desconectada)' : ''}`;
+    return `<option value="${encodeURIComponent(s.display_id)}" ${s.display_id === st.selected_display_id ? 'selected' : ''}>${label}</option>`;
+  }).join('');
+  const activeLabel = st.active_display_name || st.active_display_id || '-';
+  return `
+    <br><span style="font-size:11px;color:var(--muted);">Pantalla activa: ${activeLabel} · ${st.displays.length} detectada(s)</span>
+    ${st.change_pending ? '<br><span class="badge warn">Aplicando cambio de pantalla…</span>' : ''}
+    ${st.fallback_active ? `<br><span class="badge warn" title="${st.display_warning || ''}">Usando pantalla principal temporalmente</span>` : ''}
+    ${st.display_warning ? `<br><span style="font-size:11px;color:var(--warn,#b8860b);">${st.display_warning}</span>` : ''}
+    <br><select style="font-size:11px;padding:3px;width:auto;margin-top:4px;" onchange="changeScreenCamDisplay('${d.rustdesk_id}', ${ownerId}, this)">${options}</select>
+  `;
+}
+
+async function changeScreenCamDisplay(rustdeskId, ownerId, select) {
+  const displayId = decodeURIComponent(select.value);
+  const displayName = select.options[select.selectedIndex].text.split(' — ')[0];
+  select.disabled = true;
+  try {
+    await api(`/api/admin/devices/${rustdeskId}/screen-cam/display`, {
+      method: 'PUT',
+      body: { display_id: displayId, display_name: displayName },
+    });
+    loadAccountScreenCam(ownerId);
+  } catch (e) {
+    alert(e.message);
+    select.disabled = false;
+  }
+}
+
+// ---------- Previsualizacion de video (WebRTC / WHEP) ----------
+let PREVIEW_STATE = null;
+
+async function openScreenCamPreview(rustdeskId) {
+  const div = document.createElement('div');
+  div.className = 'modal-backdrop';
+  div.innerHTML = `
+    <div class="card modal" style="width:820px;max-width:95vw;">
+      <h2>Previsualizacion en vivo</h2>
+      <div id="pvStatus" style="font-size:13px;color:var(--muted);">Conectando con el dispositivo…</div>
+      <video id="pvVideo" autoplay playsinline muted style="width:100%;background:#000;border-radius:8px;margin-top:12px;display:none;"></video>
+      <div style="margin-top:12px;display:flex;gap:8px;justify-content:space-between;align-items:center;">
+        <span id="pvTimer" style="font-size:12px;color:var(--muted);"></span>
+        <span>
+          <button type="button" class="secondary" onclick="document.getElementById('pvVideo').requestFullscreen?.()">Pantalla completa</button>
+          <button type="button" class="danger" onclick="closeScreenCamPreview()">Finalizar</button>
+        </span>
+      </div>
+    </div>`;
+  document.body.appendChild(div);
+
+  try {
+    const session = await api(`/api/admin/devices/${rustdeskId}/screen-cam/preview`, { method: 'POST' });
+    PREVIEW_STATE = { rustdeskId, sessionId: session.session_id, pc: null, poll: null, timer: null, deadline: Date.now() + session.expires_in * 1000 };
+    setPreviewStatus('Esperando senal de ScreenCam…');
+    startPreviewPolling();
+  } catch (e) {
+    setPreviewStatus(`No se pudo iniciar: ${e.message}`, true);
+  }
+}
+
+function setPreviewStatus(text, isError) {
+  const el = document.getElementById('pvStatus');
+  if (el) { el.textContent = text; el.style.color = isError ? 'var(--danger)' : 'var(--muted)'; }
+}
+
+// El cliente tarda en conectarse al gateway; se consulta el estado de la
+// sesion hasta que quede "ready" (o falle/expire).
+function startPreviewPolling() {
+  if (!PREVIEW_STATE) return;
+  PREVIEW_STATE.timer = setInterval(() => {
+    const left = Math.max(0, Math.round((PREVIEW_STATE.deadline - Date.now()) / 1000));
+    const el = document.getElementById('pvTimer');
+    if (el) el.textContent = `Tiempo restante: ${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
+    if (left <= 0) closeScreenCamPreview();
+  }, 1000);
+
+  PREVIEW_STATE.poll = setInterval(async () => {
+    if (!PREVIEW_STATE) return;
+    try {
+      const s = await api(`/api/admin/devices/${PREVIEW_STATE.rustdeskId}/screen-cam/preview/${PREVIEW_STATE.sessionId}`);
+      if (s.status === 'ready' && s.playback_url && !PREVIEW_STATE.pc) {
+        clearInterval(PREVIEW_STATE.poll);
+        setPreviewStatus('Preparando video…');
+        startWhepPlayback(s.playback_url);
+      } else if (['failed', 'expired', 'stopped'].includes(s.status)) {
+        clearInterval(PREVIEW_STATE.poll);
+        setPreviewStatus(`La sesion termino (${s.status})${s.error ? `: ${s.error}` : ''}`, true);
+      }
+    } catch (_) { /* reintenta en el proximo tick */ }
+  }, 1500);
+}
+
+// WHEP: se manda la oferta SDP por POST y el gateway devuelve la respuesta.
+async function startWhepPlayback(whepUrl) {
+  try {
+    const pc = new RTCPeerConnection();
+    PREVIEW_STATE.pc = pc;
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.ontrack = (ev) => {
+      const video = document.getElementById('pvVideo');
+      if (video) { video.srcObject = ev.streams[0]; video.style.display = 'block'; }
+      setPreviewStatus('En vivo');
+    };
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const res = await fetch(whepUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp' },
+      body: offer.sdp,
+    });
+    if (!res.ok) throw new Error(`El gateway rechazo la reproduccion (${res.status})`);
+    await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+  } catch (e) {
+    setPreviewStatus(`No se pudo reproducir: ${e.message}`, true);
+  }
+}
+
+async function closeScreenCamPreview() {
+  const state = PREVIEW_STATE;
+  PREVIEW_STATE = null;
+  if (state) {
+    clearInterval(state.poll);
+    clearInterval(state.timer);
+    state.pc?.close();
+    try {
+      await api(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}`, { method: 'DELETE' });
+    } catch (_) { /* la sesion expira sola igual */ }
+  }
+  closeModal();
+}
+
+// Si el admin cierra la pestana, se corta la publicacion igual.
+window.addEventListener('beforeunload', () => {
+  if (PREVIEW_STATE) {
+    navigator.sendBeacon?.(`/api/admin/devices/${PREVIEW_STATE.rustdeskId}/screen-cam/preview/${PREVIEW_STATE.sessionId}/beacon-stop`);
+  }
+});
 
 // Muchos DVR/NVR se configuran desde su propia pantalla (control remoto o
 // teclado tactil), sin portapapeles disponible -- hace falta poder LEER las

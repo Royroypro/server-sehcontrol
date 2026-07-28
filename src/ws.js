@@ -72,15 +72,52 @@ function initWebSocketServer(httpServer) {
 
     ws.on('close', () => removeConnection(userId, ws));
     ws.on('error', () => removeConnection(userId, ws));
-    // No se espera nada del cliente por este canal (es push server->cliente),
-    // pero se responde a un ping simple por si algun cliente lo manda para
-    // mantener viva la conexion a traves de proxies/NAT.
+    // El canal es principalmente push server->cliente, pero ahora tambien
+    // acepta eventos del cliente para las sesiones de previsualizacion de
+    // ScreenCam (screen_cam.preview.*). Se responde ademas a un ping simple
+    // por si algun proxy/NAT corta conexiones inactivas.
     ws.on('message', (raw) => {
-      if (raw.toString() === 'ping') send(ws, { type: 'pong' });
+      const text = raw.toString();
+      if (text === 'ping') return send(ws, { type: 'pong' });
+      let msg;
+      try {
+        msg = JSON.parse(text);
+      } catch (_) {
+        return; // mensaje no valido: se ignora, no se rompe la conexion
+      }
+      handleClientEvent(userId, msg, ws);
     });
   });
 
   return wss;
+}
+
+// Eventos cliente -> servidor. Se requiere `require` diferido porque
+// screenCamPreview importa este modulo (evita ciclo en tiempo de carga).
+function handleClientEvent(userId, msg, socket) {
+  const event = msg?.event;
+  if (typeof event !== 'string' || !event.startsWith('screen_cam.preview.')) return;
+
+  const preview = require('./screenCamPreview');
+  const sessionId = typeof msg.session_id === 'string' ? msg.session_id : null;
+  if (!sessionId) return;
+
+  const statusByEvent = {
+    'screen_cam.preview.connecting': null, // informativo, no cambia estado
+    'screen_cam.preview.started': 'publishing',
+    'screen_cam.preview.failed': 'failed',
+    'screen_cam.preview.stopped': 'stopped',
+  };
+  if (!(event in statusByEvent)) return;
+  const status = statusByEvent[event];
+  if (!status) return;
+
+  try {
+    const updated = preview.updateFromClient(sessionId, { status, error: msg.error });
+    if (updated) send(socket, { type: 'screen_cam.preview.state', data: updated });
+  } catch (_) {
+    // Un evento malformado del cliente no debe tumbar el websocket.
+  }
 }
 
 module.exports = { initWebSocketServer, pushToUser, pushToAll };

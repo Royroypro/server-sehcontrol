@@ -108,10 +108,33 @@ router.get('/me/screen-cam', (req, res) => {
 });
 
 function handleModuleError(res, e) {
-  const statusByCode = { NOT_FOUND: 404, NOT_LICENSED: 403, QUOTA_EXCEEDED: 409 };
+  const statusByCode = { NOT_FOUND: 404, NOT_LICENSED: 403, FORBIDDEN: 403, QUOTA_EXCEEDED: 409 };
   const status = statusByCode[e.code] || 400;
   res.status(status).json({ error: e.message });
 }
+
+// El cliente final puede cambiar la pantalla de sus propios equipos, salvo
+// que el equipo este en modo "supervised" (ahi solo el admin) -- ver
+// screenCamPolicy.permissionsFor.
+router.put('/me/screen-cam/devices/:rustdeskId/display', (req, res) => {
+  const rustdeskId = String(req.params.rustdeskId);
+  try {
+    screenCamPolicy.assertPermission('screen_cam.change_display', {
+      role: req.user.role, userId: req.user.sub, rustdeskId,
+    });
+    const { display_id: displayId, display_name: displayName } = req.body || {};
+    if (displayId != null && typeof displayId !== 'string') {
+      return res.status(400).json({ error: 'display_id invalido' });
+    }
+    screenCamPolicy.setSelectedDisplay(rustdeskId, {
+      displayId: displayId ? displayId.slice(0, 200) : null,
+      displayName: typeof displayName === 'string' ? displayName.slice(0, 200) : null,
+    }, req.user.sub);
+    res.json(screenCamPolicy.displayStateFor(rustdeskId));
+  } catch (e) {
+    handleModuleError(res, e);
+  }
+});
 
 router.post('/me/screen-cam/devices/:rustdeskId/activate', (req, res) => {
   try {

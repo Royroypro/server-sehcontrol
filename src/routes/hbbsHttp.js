@@ -58,6 +58,22 @@ function normalizeUuid(uuid) {
   }
 }
 
+// Lista de pantallas conectadas que reporta el cliente. Se normaliza campo
+// por campo (en vez de guardar el JSON crudo) para que el panel siempre lea
+// la misma forma, sin importar que agregue el cliente mas adelante.
+function normalizeDisplays(list) {
+  if (!Array.isArray(list)) return null;
+  return list.slice(0, 16).map((d) => ({
+    display_id: typeof d?.display_id === 'string' ? d.display_id.slice(0, 200) : null,
+    name: typeof d?.name === 'string' ? d.name.slice(0, 200) : null,
+    index: Number.isInteger(d?.index) ? d.index : null,
+    width: Number.isInteger(d?.width) ? d.width : null,
+    height: Number.isInteger(d?.height) ? d.height : null,
+    primary: d?.primary === true,
+    connected: d?.connected !== false,
+  })).filter((d) => d.display_id);
+}
+
 // Identificador de hardware estable que manda el cliente parchado en
 // deviceInfo.machine_id (machine-id/MachineGuid/IOPlatformUUID, ya hasheado
 // del lado cliente). Sobrevive a una reinstalacion; el rustdesk_id no.
@@ -325,6 +341,13 @@ router.post('/heartbeat', (req, res) => {
         // sin autenticacion pese a que se le mandaron credenciales.
         authEnabled: typeof screenCam.auth_enabled === 'boolean' ? screenCam.auth_enabled : null,
         reportedRtspUser: typeof screenCam.rtsp_user === 'string' ? screenCam.rtsp_user.slice(0, 50) : null,
+        // Pantallas conectadas + cual esta capturando de verdad. Se acota el
+        // tamano de la lista para que un cliente con datos raros no infle la
+        // fila (el caso real son 1-4 monitores).
+        availableDisplays: normalizeDisplays(screenCam.available_displays),
+        activeDisplayId: typeof screenCam.active_display_id === 'string' ? screenCam.active_display_id.slice(0, 200) : null,
+        fallbackActive: typeof screenCam.fallback_active === 'boolean' ? screenCam.fallback_active : null,
+        displayWarning: typeof screenCam.display_warning === 'string' ? screenCam.display_warning.slice(0, 300) : null,
       });
     }
   }

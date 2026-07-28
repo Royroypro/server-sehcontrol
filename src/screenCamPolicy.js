@@ -21,7 +21,17 @@ const MODULE = 'screen_cam';
 const DEFAULT_POLICY = {
   licensed: false, desired_state: 'stopped', mode: 'local', max_streams: 0,
   rtsp_user: null, rtsp_password: null,
+  selected_display_id: null, fallback_to_primary: true,
 };
+
+function safeParseDisplays(raw) {
+  try {
+    const arr = JSON.parse(raw || '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch (_) {
+    return [];
+  }
+}
 
 function getPlanModule(planId) {
   if (!planId) return null;
@@ -142,6 +152,61 @@ function resolvePolicy(userId, rustdeskId) {
     // generaron credenciales -- el cliente lo trata como "sin auth".
     rtsp_user: licensed ? (deviceSettings?.rtsp_user || null) : null,
     rtsp_password: licensed ? (deviceSettings?.rtsp_password || null) : null,
+    // Pantalla elegida por el admin. Opcional a proposito: un cliente viejo
+    // que no lo entienda sigue capturando la principal, como hasta ahora.
+    selected_display_id: deviceSettings?.selected_display_id || null,
+    fallback_to_primary: (deviceSettings?.fallback_to_primary ?? 1) === 1,
+  };
+}
+
+// Cambia la pantalla que debe capturar el equipo. Se guarda por display_id
+// (no por indice) y se empuja al instante por WebSocket; la confirmacion
+// real llega despues, cuando el heartbeat reporte active_display_id igual
+// al seleccionado (ver reportDeviceState / listDevicesForCustomer).
+function setSelectedDisplay(rustdeskId, { displayId, displayName, fallbackToPrimary }, actorUserId) {
+  db.prepare(`
+    insert into device_screen_cam_settings (rustdesk_id, selected_display_id, selected_display_name, fallback_to_primary, updated_at)
+    values (?, ?, ?, coalesce(?, 1), datetime('now'))
+    on conflict(rustdesk_id) do update set
+      selected_display_id = excluded.selected_display_id,
+      selected_display_name = excluded.selected_display_name,
+      fallback_to_primary = coalesce(?, device_screen_cam_settings.fallback_to_primary),
+      updated_at = datetime('now')
+  `).run(
+    rustdeskId, displayId || null, displayName || null,
+    fallbackToPrimary == null ? null : (fallbackToPrimary ? 1 : 0),
+    fallbackToPrimary == null ? null : (fallbackToPrimary ? 1 : 0),
+  );
+  notifications.logActivity(actorUserId, 'screen_cam_display_selected', 'device', rustdeskId,
+    JSON.stringify({ display_id: displayId, display_name: displayName || null }));
+  const owner = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (owner) notifyUser(owner.owner_user_id, rustdeskId);
+}
+
+// Estado de pantallas de un equipo, para el panel: lista reportada, cual
+// esta configurada, cual esta activa de verdad, y si hay un cambio pendiente
+// de aplicarse (seleccionada != activa, sin que sea un fallback).
+function displayStateFor(rustdeskId) {
+  const s = getDeviceSettings(rustdeskId);
+  if (!s) return null;
+  const displays = safeParseDisplays(s.displays);
+  const selected = s.selected_display_id || null;
+  const active = s.active_display_id || null;
+  const fallbackActive = s.fallback_active === 1;
+  return {
+    displays,
+    supports_display_selection: !!s.displays_updated_at,
+    selected_display_id: selected,
+    selected_display_name: s.selected_display_name || null,
+    active_display_id: active,
+    active_display_name: displays.find((d) => d.display_id === active)?.name || null,
+    fallback_to_primary: (s.fallback_to_primary ?? 1) === 1,
+    fallback_active: fallbackActive,
+    display_warning: s.display_warning || null,
+    // "Aplicando cambio": el admin eligio una pantalla y el equipo todavia
+    // no confirmo que la esta capturando (y no es porque cayo en fallback).
+    change_pending: !!selected && !!active && selected !== active && !fallbackActive,
+    displays_updated_at: s.displays_updated_at || null,
   };
 }
 
@@ -204,6 +269,38 @@ function moduleError(code, message) {
   const err = new Error(message);
   err.code = code;
   return err;
+}
+
+// Permisos granulares de ScreenCam (seccion 14 del spec). No hay un sistema
+// de roles arbitrarios en este panel -- solo "admin" y "client" -- asi que
+// los tres permisos se derivan del rol y del modo del dispositivo:
+//
+//   - view_status:    admin siempre; el cliente, sobre sus propios equipos.
+//   - change_display: admin siempre; el cliente solo si el modo NO es
+//                     "supervised" (en supervised la pantalla la fija el
+//                     panel y el usuario local no puede cambiarla).
+//   - open_preview:   solo admin. La seccion 12 pide "permiso administrativo
+//                     especifico" y que quede registrado quien miro; hasta
+//                     que exista un rol intermedio, se restringe a admin.
+function permissionsFor({ role, userId, rustdeskId }) {
+  const isAdmin = role === 'admin';
+  const device = rustdeskId
+    ? db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId)
+    : null;
+  const isOwner = !!device && device.owner_user_id === userId;
+  const mode = rustdeskId ? (getDeviceSettings(rustdeskId)?.mode || null) : null;
+
+  return {
+    'screen_cam.view_status': isAdmin || isOwner,
+    'screen_cam.change_display': isAdmin || (isOwner && mode !== 'supervised'),
+    'screen_cam.open_preview': isAdmin,
+  };
+}
+
+function assertPermission(permission, context) {
+  if (!permissionsFor(context)[permission]) {
+    throw moduleError('FORBIDDEN', `No tienes permiso para esta accion (${permission})`);
+  }
 }
 
 // Panel del cliente: el usuario final elige en cuales de sus equipos gastar
@@ -275,6 +372,7 @@ function listDevicesForCustomer(userId) {
       auth_enabled: r.reported_auth_enabled === 1,
       auth_mismatch: authMismatch,
       last_report_at: r.last_report_at || null,
+      displays: displayStateFor(r.rustdesk_id),
     };
   });
 
@@ -288,8 +386,29 @@ function listDevicesForCustomer(userId) {
 // eso lo define el servidor, no el cliente.
 function reportDeviceState(rustdeskId, {
   actualState, encoder, lastError, rtspClients, localIp, rtspPort, authEnabled, reportedRtspUser,
+  availableDisplays, activeDisplayId, fallbackActive, displayWarning,
 }) {
   const authEnabledValue = authEnabled == null ? null : (authEnabled ? 1 : 0);
+  const displaysJson = Array.isArray(availableDisplays) ? JSON.stringify(availableDisplays) : null;
+  const fallbackActiveValue = fallbackActive == null ? null : (fallbackActive ? 1 : 0);
+  // display_warning se sobrescribe siempre (incluido a null): es estado
+  // vigente, no historial -- si el equipo se recupero, la advertencia se va.
+  if (displaysJson !== null || activeDisplayId != null || fallbackActiveValue !== null) {
+    db.prepare(`
+      insert into device_screen_cam_settings (rustdesk_id, displays, displays_updated_at, active_display_id, fallback_active, display_warning, updated_at)
+      values (?, ?, case when ? is null then null else datetime('now') end, ?, ?, ?, datetime('now'))
+      on conflict(rustdesk_id) do update set
+        displays = coalesce(?, device_screen_cam_settings.displays),
+        displays_updated_at = case when ? is null then device_screen_cam_settings.displays_updated_at else datetime('now') end,
+        active_display_id = coalesce(?, device_screen_cam_settings.active_display_id),
+        fallback_active = coalesce(?, device_screen_cam_settings.fallback_active),
+        display_warning = ?,
+        updated_at = datetime('now')
+    `).run(
+      rustdeskId, displaysJson, displaysJson, activeDisplayId || null, fallbackActiveValue, displayWarning || null,
+      displaysJson, displaysJson, activeDisplayId || null, fallbackActiveValue, displayWarning || null,
+    );
+  }
   db.prepare(`
     insert into device_screen_cam_settings (
       rustdesk_id, actual_state, encoder, last_error, rtsp_clients, local_ip, rtsp_port,
@@ -316,6 +435,24 @@ function reportDeviceState(rustdeskId, {
   if (lastError) {
     notifications.logActivity(null, 'screen_cam_error_reported', 'device', rustdeskId,
       JSON.stringify({ error: lastError, encoder: encoder || null }));
+  }
+
+  // Primera vez que este equipo reporta sus pantallas y todavia no tiene una
+  // seleccion guardada: se persiste el display_id de la principal que el
+  // cliente marco como primary. Se busca por la bandera "primary", no por
+  // index === 0, porque el indice no es estable (Windows lo reordena).
+  if (Array.isArray(availableDisplays) && availableDisplays.length) {
+    const current = getDeviceSettings(rustdeskId);
+    if (!current?.selected_display_id) {
+      const primary = availableDisplays.find((d) => d?.primary) || availableDisplays[0];
+      if (primary?.display_id) {
+        db.prepare(`
+          update device_screen_cam_settings
+          set selected_display_id = ?, selected_display_name = ?, updated_at = datetime('now')
+          where rustdesk_id = ? and selected_display_id is null
+        `).run(primary.display_id, primary.name || null, rustdeskId);
+      }
+    }
   }
 }
 
@@ -349,4 +486,8 @@ module.exports = {
   reportDeviceState,
   regenerateRtspCredentials,
   clearRtspCredentials,
+  setSelectedDisplay,
+  displayStateFor,
+  permissionsFor,
+  assertPermission,
 };

@@ -9,6 +9,7 @@ const { formatCurrency } = require('../format');
 const rustdeskKey = require('../rustdeskKey');
 const deviceClaim = require('../deviceClaim');
 const screenCamPolicy = require('../screenCamPolicy');
+const screenCamPreview = require('../screenCamPreview');
 
 const router = express.Router();
 
@@ -33,15 +34,53 @@ function getWhatsappNumber() {
   return digits || null;
 }
 
+function buildClientPolicy(rustdeskId) {
+  const owner = rustdeskId ? deviceClaim.getDeviceOwner(rustdeskId) : null;
+  return {
+    force_login: (process.env.FORCE_LOGIN || 'true') === 'true',
+    server_key: rustdeskKey.getPublicKeyInfo(),
+    whatsapp_number: getWhatsappNumber(),
+    screen_cam: screenCamPolicy.resolvePolicy(owner?.owner_user_id, rustdeskId),
+  };
+}
+
 router.get('/client-policy', (req, res) => {
   try {
     const rustdeskId = typeof req.query.id === 'string' ? req.query.id.trim().slice(0, 100) : null;
-    const owner = rustdeskId ? deviceClaim.getDeviceOwner(rustdeskId) : null;
+    res.set('Cache-Control', 'no-store').json(buildClientPolicy(rustdeskId));
+  } catch (e) {
+    res.status(500).json({ error: `No se pudo leer la key del servidor: ${e.message}` });
+  }
+});
+
+// Variante v2 pedida por el cliente: identifica el equipo por `device_uid`
+// en vez de por el rustdesk_id. Como no nos definieron contra que valor
+// resuelve ese identificador, se prueba contra los tres que ya guardamos
+// (machine_id, rustdesk_uuid y el propio rustdesk_id) -- asi funciona sea
+// cual sea el que este mandando el cliente, sin adivinar. La respuesta es
+// identica a la de /api/client-policy, mas `device_uid_resolved` para que
+// puedan verificar que el servidor efectivamente reconocio el equipo.
+//
+// /api/client-policy?id= sigue funcionando igual: los clientes ya
+// desplegados no se rompen.
+function resolveDeviceUid(deviceUid) {
+  if (!deviceUid) return null;
+  return db.prepare(`
+    select rustdesk_id from devices
+    where machine_id = ? or rustdesk_uuid = ? or rustdesk_id = ?
+    limit 1
+  `).get(deviceUid, deviceUid, deviceUid)?.rustdesk_id || null;
+}
+
+router.get('/v2/client/policy', (req, res) => {
+  try {
+    const deviceUid = typeof req.query.device_uid === 'string' ? req.query.device_uid.trim().slice(0, 200) : null;
+    const fallbackId = typeof req.query.id === 'string' ? req.query.id.trim().slice(0, 100) : null;
+    const rustdeskId = resolveDeviceUid(deviceUid) || fallbackId;
     res.set('Cache-Control', 'no-store').json({
-      force_login: (process.env.FORCE_LOGIN || 'true') === 'true',
-      server_key: rustdeskKey.getPublicKeyInfo(),
-      whatsapp_number: getWhatsappNumber(),
-      screen_cam: screenCamPolicy.resolvePolicy(owner?.owner_user_id, rustdeskId),
+      ...buildClientPolicy(rustdeskId),
+      device_uid_resolved: !!rustdeskId,
+      rustdesk_id: rustdeskId,
     });
   } catch (e) {
     res.status(500).json({ error: `No se pudo leer la key del servidor: ${e.message}` });
@@ -117,6 +156,25 @@ router.post('/messages/:id/ack', requireBearerAuth, (req, res) => {
   const alert = db.prepare('select id from alerts where id = ? and (user_id = ? or user_id is null)').get(req.params.id, req.user.sub);
   if (!alert) return res.status(404).json({ error: 'No encontrado' });
   db.prepare('insert or ignore into alert_reads (alert_id, user_id) values (?, ?)').run(alert.id, req.user.sub);
+  res.json({ ok: true });
+});
+
+// Consultado por el gateway multimedia (MediaMTX) antes de aceptar una
+// publicacion o una lectura de un stream de previsualizacion. Responde 200
+// para autorizar y 401 para rechazar, que es el contrato que espera
+// MediaMTX en `authHTTPAddress`. No requiere sesion de usuario: la
+// autorizacion es por token de la sesion, no por cookie.
+router.post('/media-auth', (req, res) => {
+  const { action, path, query } = req.body || {};
+  // MediaMTX manda el query string crudo; el token viaja ahi.
+  let token = null;
+  try {
+    token = new URLSearchParams(String(query || '')).get('token');
+  } catch (_) {
+    token = null;
+  }
+  const allowed = screenCamPreview.authorizeMedia({ action, path, token });
+  if (!allowed) return res.status(401).json({ error: 'No autorizado' });
   res.json({ ok: true });
 });
 

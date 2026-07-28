@@ -303,4 +303,46 @@ addColumnIfMissing('device_screen_cam_settings', 'rtsp_password', 'varchar(100)'
 addColumnIfMissing('device_screen_cam_settings', 'reported_auth_enabled', 'tinyint');
 addColumnIfMissing('device_screen_cam_settings', 'reported_rtsp_user', 'varchar(50)');
 
+// Seleccion remota de pantalla (ver docs/CLIENT_INTEGRATION.md seccion 15).
+// La seleccion se guarda por display_id, NO por indice: Windows reordena los
+// indices al conectar/desconectar/duplicar monitores. El indice solo queda
+// como referencia de respaldo dentro de screen_cam_displays.
+addColumnIfMissing('device_screen_cam_settings', 'selected_display_id', 'varchar(200)');
+addColumnIfMissing('device_screen_cam_settings', 'selected_display_name', 'varchar(200)');
+addColumnIfMissing('device_screen_cam_settings', 'fallback_to_primary', 'tinyint not null default 1');
+// Lo que el cliente reporta que esta capturando de verdad (heartbeat).
+addColumnIfMissing('device_screen_cam_settings', 'active_display_id', 'varchar(200)');
+addColumnIfMissing('device_screen_cam_settings', 'fallback_active', 'tinyint');
+addColumnIfMissing('device_screen_cam_settings', 'display_warning', 'varchar(300)');
+// Ultima lista de pantallas reportada, como JSON. Por dispositivo: cada
+// equipo tiene su propia configuracion de monitores.
+addColumnIfMissing('device_screen_cam_settings', 'displays', 'text');
+addColumnIfMissing('device_screen_cam_settings', 'displays_updated_at', 'datetime');
+
+// Sesiones temporales de previsualizacion de video (WebRTC). No se guarda
+// video ni fragmentos: esta tabla solo registra quien pidio ver que equipo,
+// cuando, y el token de publicacion de un solo uso (que expira). Sirve
+// ademas como registro de auditoria de quien abrio una vista en vivo.
+db.exec(`
+  create table if not exists screen_cam_preview_sessions (
+    id varchar(40) primary key,
+    rustdesk_id varchar(100) not null,
+    requested_by integer references users(id) on delete set null,
+    status varchar(20) not null default 'creating'
+      check (status in ('creating','waiting_client','publishing','ready','stopped','expired','failed')),
+    publish_token varchar(100) not null,
+    playback_url varchar(500),
+    error varchar(200),
+    expires_at datetime not null,
+    started_at datetime,
+    ended_at datetime,
+    created_at datetime not null default (current_timestamp)
+  );
+  create index if not exists idx_preview_device on screen_cam_preview_sessions(rustdesk_id, status);
+`);
+// Token separado para la REPRODUCCION en el navegador: el de publicacion
+// (publish_token) nunca sale del cliente, y este nunca llega al equipo. Asi
+// un token filtrado de un lado no sirve para el otro.
+addColumnIfMissing('screen_cam_preview_sessions', 'read_token', 'varchar(100)');
+
 module.exports = db;

@@ -12,6 +12,7 @@ const rustdeskKey = require('../rustdeskKey');
 const { pushToAll } = require('../ws');
 const clientDownload = require('../clientDownload');
 const screenCamPolicy = require('../screenCamPolicy');
+const screenCamPreview = require('../screenCamPreview');
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -458,6 +459,74 @@ router.delete('/devices/:rustdeskId/screen-cam/rtsp-credentials', (req, res) => 
   if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
   screenCamPolicy.clearRtspCredentials(rustdeskId, req.user.sub);
   res.json({ ok: true });
+});
+
+// ---------- ScreenCam: seleccion remota de pantalla ----------
+function screenCamErrorStatus(code) {
+  return { NOT_FOUND: 404, FORBIDDEN: 403, NOT_ACTIVE: 409, ALREADY_ACTIVE: 409, MEDIA_NOT_CONFIGURED: 503 }[code] || 400;
+}
+
+router.get('/devices/:rustdeskId/screen-cam/displays', (req, res) => {
+  const rustdeskId = String(req.params.rustdeskId);
+  const device = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
+  res.json(screenCamPolicy.displayStateFor(rustdeskId) || { supports_display_selection: false, displays: [] });
+});
+
+// Cambia la pantalla capturada. La URL RTSP y las credenciales NO cambian:
+// solo se reconstruye el capturador/encoder del lado cliente.
+router.put('/devices/:rustdeskId/screen-cam/display', (req, res) => {
+  const rustdeskId = String(req.params.rustdeskId);
+  const device = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
+  const { display_id: displayId, display_name: displayName, fallback_to_primary: fallbackToPrimary } = req.body || {};
+  if (displayId != null && typeof displayId !== 'string') {
+    return res.status(400).json({ error: 'display_id invalido' });
+  }
+  screenCamPolicy.setSelectedDisplay(rustdeskId, {
+    displayId: displayId ? displayId.slice(0, 200) : null,
+    displayName: typeof displayName === 'string' ? displayName.slice(0, 200) : null,
+    fallbackToPrimary,
+  }, req.user.sub);
+  res.json(screenCamPolicy.displayStateFor(rustdeskId));
+});
+
+// ---------- ScreenCam: previsualizacion de video ----------
+router.post('/devices/:rustdeskId/screen-cam/preview', (req, res) => {
+  try {
+    screenCamPolicy.assertPermission('screen_cam.open_preview', {
+      role: req.user.role, userId: req.user.sub, rustdeskId: String(req.params.rustdeskId),
+    });
+    res.status(201).json(screenCamPreview.startPreview(String(req.params.rustdeskId), req.user.sub));
+  } catch (e) {
+    res.status(screenCamErrorStatus(e.code)).json({ error: e.message });
+  }
+});
+
+router.get('/devices/:rustdeskId/screen-cam/preview/:sessionId', (req, res) => {
+  const session = screenCamPreview.statusOf(String(req.params.sessionId));
+  if (!session) return res.status(404).json({ error: 'Sesion no encontrada' });
+  res.json(session);
+});
+
+router.delete('/devices/:rustdeskId/screen-cam/preview/:sessionId', (req, res) => {
+  try {
+    res.json(screenCamPreview.stopPreview(String(req.params.sessionId), req.user.sub));
+  } catch (e) {
+    res.status(screenCamErrorStatus(e.code)).json({ error: e.message });
+  }
+});
+
+// navigator.sendBeacon solo puede hacer POST, asi que el cierre al abandonar
+// la pagina necesita su propia ruta. Sin esto, cerrar la pestana dejaria al
+// equipo publicando video hasta que la sesion expire sola.
+router.post('/devices/:rustdeskId/screen-cam/preview/:sessionId/beacon-stop', (req, res) => {
+  try {
+    screenCamPreview.stopPreview(String(req.params.sessionId), req.user.sub);
+  } catch (_) {
+    // La sesion pudo haber expirado ya; no hay nada que informar al beacon.
+  }
+  res.status(204).end();
 });
 
 router.put('/devices/:rustdeskId/screen-cam', (req, res) => {

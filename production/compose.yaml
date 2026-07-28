@@ -48,3 +48,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # Gateway multimedia para la previsualizacion de ScreenCam. Componente
+  # separado del panel a proposito (aunque viva en la misma maquina): recibe
+  # la publicacion SRT saliente del cliente y la entrega al navegador por
+  # WebRTC. No graba. Ver production/mediamtx.yml.
+  mediamtx:
+    image: bluenviron/mediamtx:1.9.3
+    container_name: sehcontrol-mediamtx
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - panel
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro

@@ -1051,3 +1051,175 @@ Implementación de referencia: `src/screenCamPolicy.js` (`generateRtspCredential
 `src/routes/hbbsHttp.js` (parseo de `auth_enabled`/`rtsp_user` en `/heartbeat`) y
 `src/routes/admin.js` (endpoints `/screen-cam/rtsp-credentials/*`) del repo
 `rustdesk-admin-panel`.
+
+---
+
+## 15. Selección remota de pantalla + previsualización de video (28/07)
+
+Implementado y desplegado. Respuesta al spec de dos capacidades: elegir qué pantalla
+captura ScreenCam desde el panel, y ver la señal en vivo desde el navegador del admin.
+
+**Se respetó lo pedido:** una sola pantalla activa, una sola URL RTSP, y sin grabación.
+Cambiar de pantalla **no** altera la URL RTSP ni las credenciales.
+
+### 15.1 Endpoint v2 (y por qué el v1 sigue vivo)
+
+Implementamos el endpoint que estaban pidiendo:
+
+```
+GET /api/v2/client/policy?device_uid=<uid>
+```
+
+**Importante:** ese endpoint venía respondiendo **404** hasta ahora — detectamos más de
+1000 peticiones desde `python-requests/2.32.5` fallando en silencio. Nunca nos habían
+pasado ese contrato, así que no existía.
+
+Como no nos definieron contra qué valor resuelve `device_uid`, el servidor lo prueba
+contra los tres identificadores que ya guardamos: `machine_id` (el hash de la sección
+10), `rustdesk_uuid` y el propio `rustdesk_id`. Funciona con cualquiera de los tres, sin
+que tengamos que adivinar. La respuesta agrega dos campos para que puedan verificar:
+
+```json
+{ "device_uid_resolved": true, "rustdesk_id": "485236790", "screen_cam": { ... } }
+```
+
+Si `device_uid_resolved` viene `false`, el equipo no fue reconocido y la política sale
+en sus valores por defecto (no licenciado). **`GET /api/client-policy?id=` sigue
+funcionando igual**, para no romper los clientes ya desplegados.
+
+### 15.2 Política: pantalla seleccionada
+
+El bloque `screen_cam` de la política (v1, v2 y el evento WS `screen_cam.update`) suma:
+
+```json
+{
+  "screen_cam": {
+    "licensed": true, "desired_state": "running", "mode": "managed",
+    "rtsp_user": "seh_a1b2c3", "rtsp_password": "K7pQ2mVx9nR4",
+    "selected_display_id": "\\\\.\\DISPLAY2",
+    "fallback_to_primary": true
+  }
+}
+```
+
+`selected_display_id` es opcional, como pidieron: un cliente viejo que no lo entienda
+sigue capturando la principal, exactamente como hasta hoy.
+
+**Cuando no hay selección previa:** en cuanto el equipo reporta sus pantallas, el
+servidor persiste el `display_id` de la que venga marcada `primary: true` — buscando por
+esa bandera, **no** por `index === 0`, como pidieron.
+
+### 15.3 Heartbeat: pantallas y estado real
+
+`POST /api/heartbeat` acepta, dentro del mismo objeto `screen_cam`:
+
+```json
+{
+  "available_displays": [
+    { "display_id": "\\\\.\\DISPLAY1", "name": "Pantalla principal", "index": 0,
+      "width": 1360, "height": 768, "primary": true, "connected": true }
+  ],
+  "selected_display_id": "\\\\.\\DISPLAY2",
+  "active_display_id": "\\\\.\\DISPLAY2",
+  "fallback_active": false,
+  "display_warning": null
+}
+```
+
+- El servidor guarda la lista completa **por dispositivo** (cada equipo tiene su propia
+  configuración de monitores).
+- `display_warning` se sobrescribe siempre, incluido a `null`: es estado vigente, no
+  historial. Si el equipo se recupera, la advertencia desaparece sola del panel.
+- La confirmación del cambio es como pidieron: el panel muestra **"Aplicando cambio de
+  pantalla…"** hasta que un heartbeat reporte `active_display_id === selected_display_id`.
+  Durante un fallback no se muestra ese aviso (se muestra el de fallback).
+- Al desconectarse la pantalla elegida **no borramos `selected_display_id`**: cuando
+  vuelve, el equipo regresa a ella y la advertencia se limpia.
+
+### 15.4 Previsualización de video
+
+Arquitectura implementada, tal cual la propusieron:
+
+```
+Cliente Sehcontrol --SRT saliente--> MediaMTX (público) --WebRTC/WHEP--> navegador
+```
+
+El servidor **nunca** intenta conectarse a `rtsp://192.168.x.x:8554/...`: esa dirección
+es de la red privada del equipo. La conexión siempre la inicia el cliente.
+
+Endpoints (requieren admin):
+
+```
+POST   /api/admin/devices/{rustdesk_id}/screen-cam/preview
+GET    /api/admin/devices/{rustdesk_id}/screen-cam/preview/{session_id}
+DELETE /api/admin/devices/{rustdesk_id}/screen-cam/preview/{session_id}
+```
+
+Al crear la sesión, el servidor les empuja por WebSocket:
+
+```json
+{
+  "event": "screen_cam.preview.start",
+  "session_id": "pv_8f12ab",
+  "rustdesk_id": "485236790",
+  "publish_url": "srt://sehcontrol.sehuacho.com:8890",
+  "publish_token": "<token temporal>",
+  "stream_name": "pv_8f12ab",
+  "expires_in": 300
+}
+```
+
+**Publiquen con `stream_name` como path y `publish_token` como `token` en el query**, por
+ejemplo `srt://sehcontrol.sehuacho.com:8890?streamid=publish:pv_8f12ab?token=<token>`
+(ajusten al formato exacto que use su librería SRT; el gateway valida path + token
+contra nuestro endpoint de autorización).
+
+Eventos que esperamos de ustedes por WebSocket:
+
+```
+screen_cam.preview.connecting | screen_cam.preview.started
+screen_cam.preview.failed     | screen_cam.preview.stopped
+```
+
+Formato: `{ "event": "screen_cam.preview.failed", "session_id": "pv_8f12ab", "error": "media_server_unreachable" }`
+
+Y `screen_cam.preview.stop` es la orden nuestra para que dejen de publicar.
+
+### 15.5 Seguridad de la previsualización
+
+- **Dos tokens distintos**: el de publicación (solo lo conoce el equipo) y el de lectura
+  (solo lo conoce el navegador del admin). Probado: usar uno en lugar del otro da 401.
+- Ambos mueren cuando la sesión se cierra o expira. Probado: publicar con el token de una
+  sesión ya cerrada da 401.
+- Una sola sesión por dispositivo (la segunda da 409), máximo 5 minutos, y se cierra sola
+  si el cliente nunca publica.
+- El path del stream es el `session_id`, así que un token filtrado no sirve para mirar
+  otro equipo.
+- Las credenciales RTSP **nunca** se exponen al navegador.
+- Queda registrado en el log de actividad quién abrió la vista y cuándo.
+- Al cerrar la ventana (o la pestaña, vía `sendBeacon`) se corta la publicación.
+
+### 15.6 Reutilización del H.264 — pendiente de su lado
+
+Como plantearon en la sección 9 del spec, el cliente **no debe capturar ni codificar dos
+veces**: la publicación temporal tiene que reutilizar los frames H.264 que ScreenCam ya
+genera para el RTSP local. Eso es enteramente del lado cliente; del nuestro no hay nada
+que impida hacerlo así.
+
+### 15.7 Permisos
+
+Este panel solo tiene roles `admin` y `client`, así que los tres permisos del spec se
+derivan del rol y del modo del equipo:
+
+| Permiso | admin | cliente dueño |
+|---|---|---|
+| `screen_cam.view_status` | sí | sí |
+| `screen_cam.change_display` | sí | sí, salvo modo `supervised` |
+| `screen_cam.open_preview` | sí | no |
+
+`open_preview` queda solo para admin porque la sección 12 pedía "permiso administrativo
+específico". Si necesitan un rol intermedio, avisen y lo agregamos.
+
+Implementación de referencia: `src/screenCamPolicy.js` (`setSelectedDisplay`,
+`displayStateFor`, `permissionsFor`), `src/screenCamPreview.js` (sesiones y
+`authorizeMedia`), `src/ws.js` (eventos entrantes), `production/mediamtx.yml`.
