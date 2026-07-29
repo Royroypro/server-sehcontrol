@@ -8,6 +8,22 @@
 
 logLevel: info
 
+# ---------- API de control (solo interna) ----------
+# Habilitada unicamente para que el backend pueda consultar y cerrar
+# conexiones SRT cuando una previsualizacion termina o queda expirada en
+# SQLite. La limpieza de expiraciones se encola sin bloquear al consumidor.
+#
+# DEBE permanecer vinculada a 127.0.0.1: MediaMTX no trae autenticacion
+# propia para esta API, asi que cualquiera que la alcance puede listar y
+# expulsar conexiones. Cambiarla a ":9997" o "0.0.0.0:9997" la expondria
+# a Internet sin ninguna credencial de por medio -- y con network_mode:
+# host, "expuesta" significa exactamente eso.
+#
+# El puerto 9997 NO debe abrirse en el firewall, ni publicarse en Docker,
+# ni proxearse desde Nginx.
+api: yes
+apiAddress: 127.0.0.1:9997
+
 # ---------- Autorizacion delegada al panel ----------
 # MediaMTX consulta este endpoint antes de aceptar publicar/leer. El panel
 # valida que el path sea una sesion viva y que el token corresponda.
