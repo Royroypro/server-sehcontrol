@@ -84,6 +84,24 @@ docker compose up -d --build
 La preparacion para MySQL esta explicada en
 `docs/MYSQL_MIGRATION.md`. MySQL no se inicia ni se usa por defecto.
 
+## Expiracion de ScreenCam Preview
+
+Al arrancar el servidor se ejecuta inmediatamente un barrido de sesiones de
+ScreenCam Preview y luego se repite cada 30 segundos. El scheduler usa
+`setTimeout()` recursivo con `unref()`, por lo que su temporizador no mantiene
+vivo el proceso por si solo.
+
+Cada barrido marca primero en SQLite las sesiones vencidas y encola su cleanup
+asincrono sin esperar a MediaMTX. Las comprobaciones oportunistas que ya se
+ejecutan al iniciar una preview y durante media-auth siguen activas. El TTL
+total permanece en 300 segundos y la espera inicial para sesiones que aun no
+publicaron permanece en 120 segundos.
+
+Durante `SIGTERM` o `SIGINT` se detiene el scheduler, se deja de aceptar nuevas
+conexiones HTTP y se espera el drenaje de la cola de cleanup durante un maximo
+de 5 segundos. El timeout no cancela ni descarta tareas que ya estuvieran
+pendientes o activas.
+
 ## Produccion
 
 `production/README.md` cubre el despliegue del paquete ya compilado en
