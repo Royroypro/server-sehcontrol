@@ -29,7 +29,11 @@ apiAddress: 127.0.0.1:9997
 # valida que el path sea una sesion viva y que el token corresponda.
 authMethod: http
 authHTTPAddress: http://127.0.0.1:8899/api/media-auth
-authHTTPExclude: []
+# La API de control no envia credenciales de stream al callback HTTP. Se
+# excluye solo la accion "api"; la API sigue aislada en 127.0.0.1:9997.
+# Publicar y leer medios continúan pasando obligatoriamente por media-auth.
+authHTTPExclude:
+  - action: api
 
 # ---------- Entrada: publicacion del cliente ----------
 # SRT elegido para la primera version: una sola conexion saliente UDP desde

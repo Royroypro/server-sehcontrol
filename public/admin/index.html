@@ -26,6 +26,7 @@
 </div>
 
 <script src="/api.js"></script>
+<script src="/admin/screenCamPreview.js"></script>
 <script>
 let PLANS = [];
 let USERS = [];
@@ -563,6 +564,7 @@ async function changeScreenCamDisplay(rustdeskId, ownerId, select) {
 let PREVIEW_STATE = null;
 
 async function openScreenCamPreview(rustdeskId) {
+  if (PREVIEW_STATE) return;
   const div = document.createElement('div');
   div.className = 'modal-backdrop';
   div.innerHTML = `
@@ -580,13 +582,39 @@ async function openScreenCamPreview(rustdeskId) {
     </div>`;
   document.body.appendChild(div);
 
+  const state = {
+    rustdeskId,
+    sessionId: null,
+    pc: null,
+    poll: null,
+    timer: null,
+    deadline: null,
+    requestAbort: new AbortController(),
+    whepAbort: null,
+    beaconSent: false,
+  };
+  PREVIEW_STATE = state;
+
   try {
-    const session = await api(`/api/admin/devices/${rustdeskId}/screen-cam/preview`, { method: 'POST' });
-    PREVIEW_STATE = { rustdeskId, sessionId: session.session_id, pc: null, poll: null, timer: null, deadline: Date.now() + session.expires_in * 1000 };
+    const session = await api(`/api/admin/devices/${rustdeskId}/screen-cam/preview`, {
+      method: 'POST',
+      signal: state.requestAbort.signal,
+    });
+    if (PREVIEW_STATE !== state) {
+      // El admin pudo cerrar el modal mientras el POST seguia en vuelo.
+      try {
+        await api(`/api/admin/devices/${rustdeskId}/screen-cam/preview/${session.session_id}`, { method: 'DELETE' });
+      } catch (_) { /* la sesion expira sola igual */ }
+      return;
+    }
+    state.sessionId = session.session_id;
+    state.deadline = Date.now() + session.expires_in * 1000;
     setPreviewStatus('Esperando senal de ScreenCam…');
-    startPreviewPolling();
+    startPreviewPolling(state);
   } catch (e) {
-    setPreviewStatus(`No se pudo iniciar: ${e.message}`, true);
+    if (PREVIEW_STATE === state && e.name !== 'AbortError') {
+      setPreviewStatus(`No se pudo iniciar: ${e.message}`, true);
+    }
   }
 }
 
@@ -597,53 +625,74 @@ function setPreviewStatus(text, isError) {
 
 // El cliente tarda en conectarse al gateway; se consulta el estado de la
 // sesion hasta que quede "ready" (o falle/expire).
-function startPreviewPolling() {
-  if (!PREVIEW_STATE) return;
-  PREVIEW_STATE.timer = setInterval(() => {
-    const left = Math.max(0, Math.round((PREVIEW_STATE.deadline - Date.now()) / 1000));
+function startPreviewPolling(state) {
+  if (PREVIEW_STATE !== state) return;
+  state.timer = setInterval(() => {
+    if (PREVIEW_STATE !== state) return;
+    const left = Math.max(0, Math.round((state.deadline - Date.now()) / 1000));
     const el = document.getElementById('pvTimer');
     if (el) el.textContent = `Tiempo restante: ${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
     if (left <= 0) closeScreenCamPreview();
   }, 1000);
 
-  PREVIEW_STATE.poll = setInterval(async () => {
-    if (!PREVIEW_STATE) return;
+  const poll = async () => {
+    if (PREVIEW_STATE !== state) return;
     try {
-      const s = await api(`/api/admin/devices/${PREVIEW_STATE.rustdeskId}/screen-cam/preview/${PREVIEW_STATE.sessionId}`);
-      if (s.status === 'ready' && s.playback_url && !PREVIEW_STATE.pc) {
-        clearInterval(PREVIEW_STATE.poll);
+      const s = await api(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}`);
+      if (PREVIEW_STATE !== state) return;
+      if (s.status === 'ready' && s.playback_url && !state.pc) {
         setPreviewStatus('Preparando video…');
-        startWhepPlayback(s.playback_url);
+        await startWhepPlayback(s.playback_url, state);
+        return;
       } else if (['failed', 'expired', 'stopped'].includes(s.status)) {
-        clearInterval(PREVIEW_STATE.poll);
         setPreviewStatus(`La sesion termino (${s.status})${s.error ? `: ${s.error}` : ''}`, true);
+        return;
       }
     } catch (_) { /* reintenta en el proximo tick */ }
-  }, 1500);
+    if (PREVIEW_STATE === state) state.poll = setTimeout(poll, 1500);
+  };
+  state.poll = setTimeout(poll, 0);
 }
 
 // WHEP: se manda la oferta SDP por POST y el gateway devuelve la respuesta.
-async function startWhepPlayback(whepUrl) {
+async function startWhepPlayback(whepUrl, state) {
   try {
     const pc = new RTCPeerConnection();
-    PREVIEW_STATE.pc = pc;
+    if (PREVIEW_STATE !== state) {
+      pc.close();
+      return;
+    }
+    state.pc = pc;
+    state.whepAbort = new AbortController();
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.ontrack = (ev) => {
+      if (PREVIEW_STATE !== state) return;
       const video = document.getElementById('pvVideo');
       if (video) { video.srcObject = ev.streams[0]; video.style.display = 'block'; }
       setPreviewStatus('En vivo');
     };
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    await ScreenCamPreview.waitForIceGatheringComplete(pc);
+    if (PREVIEW_STATE !== state) return;
     const res = await fetch(whepUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/sdp' },
-      body: offer.sdp,
+      headers: {
+        'Content-Type': 'application/sdp',
+        Accept: 'application/sdp',
+      },
+      body: ScreenCamPreview.localOfferSdp(pc),
+      signal: state.whepAbort.signal,
     });
     if (!res.ok) throw new Error(`El gateway rechazo la reproduccion (${res.status})`);
+    if (PREVIEW_STATE !== state) return;
     await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
   } catch (e) {
-    setPreviewStatus(`No se pudo reproducir: ${e.message}`, true);
+    if (PREVIEW_STATE === state && e.name !== 'AbortError') {
+      state.pc?.close();
+      state.pc = null;
+      setPreviewStatus(`No se pudo reproducir: ${e.message}`, true);
+    }
   }
 }
 
@@ -651,22 +700,29 @@ async function closeScreenCamPreview() {
   const state = PREVIEW_STATE;
   PREVIEW_STATE = null;
   if (state) {
-    clearInterval(state.poll);
+    state.requestAbort.abort();
+    state.whepAbort?.abort();
+    clearTimeout(state.poll);
     clearInterval(state.timer);
     state.pc?.close();
-    try {
-      await api(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}`, { method: 'DELETE' });
-    } catch (_) { /* la sesion expira sola igual */ }
+    if (state.sessionId) {
+      try {
+        await api(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}`, { method: 'DELETE' });
+      } catch (_) { /* la sesion expira sola igual */ }
+    }
   }
   closeModal();
 }
 
 // Si el admin cierra la pestana, se corta la publicacion igual.
-window.addEventListener('beforeunload', () => {
-  if (PREVIEW_STATE) {
-    navigator.sendBeacon?.(`/api/admin/devices/${PREVIEW_STATE.rustdeskId}/screen-cam/preview/${PREVIEW_STATE.sessionId}/beacon-stop`);
-  }
-});
+function stopPreviewOnPageExit() {
+  const state = PREVIEW_STATE;
+  if (!state?.sessionId || state.beaconSent) return;
+  state.beaconSent = true;
+  navigator.sendBeacon?.(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}/beacon-stop`);
+}
+window.addEventListener('pagehide', stopPreviewOnPageExit);
+window.addEventListener('beforeunload', stopPreviewOnPageExit);
 
 // Muchos DVR/NVR se configuran desde su propia pantalla (control remoto o
 // teclado tactil), sin portapapeles disponible -- hace falta poder LEER las

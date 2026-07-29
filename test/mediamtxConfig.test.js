@@ -53,6 +53,16 @@ test('la API NO esta vinculada publicamente', () => {
   assert.deepStrictEqual(publicBindings, [], 'apiAddress no debe escuchar en todas las interfaces');
 });
 
+test('solo la accion interna api queda excluida del callback de autorizacion', () => {
+  const lines = effectiveLines(mediamtxYml).map((l) => l.trim());
+  const excludeIndex = lines.indexOf('authHTTPExclude:');
+  assert.notStrictEqual(excludeIndex, -1, 'debe declararse authHTTPExclude');
+  assert.strictEqual(lines[excludeIndex + 1], '- action: api');
+  assert.ok(!lines.includes('authHTTPExclude: []'), 'la API de control debe poder operar');
+  assert.ok(!lines.includes('- action: publish'), 'publish debe seguir autorizado por el panel');
+  assert.ok(!lines.includes('- action: read'), 'read debe seguir autorizado por el panel');
+});
+
 // ---------- Compose ----------
 
 test('production/compose.yaml no publica ni menciona el puerto 9997', () => {
