@@ -119,9 +119,47 @@ function syncAll() {
   return { checked: rows.length, changed };
 }
 
-function startPeriodicSync(intervalMs = 5 * 60 * 1000) {
-  syncAll();
-  setInterval(syncAll, intervalMs);
+function startPeriodicSync(intervalMs = 5 * 60 * 1000, options = {}) {
+  if (!options || typeof options !== 'object') options = {};
+  const runSync = typeof options.syncAll === 'function' ? options.syncAll : syncAll;
+  const setIntervalImpl = typeof options.setInterval === 'function'
+    ? options.setInterval : setInterval;
+  const clearIntervalImpl = typeof options.clearInterval === 'function'
+    ? options.clearInterval : clearInterval;
+  let stopped = false;
+  let intervalCleared = false;
+
+  const runProtectedSync = () => {
+    if (stopped) return;
+    try {
+      const result = runSync();
+      if (result && typeof result.catch === 'function') result.catch(() => {});
+    } catch (_) {
+      // El siguiente ciclo puede recuperarse; nunca se propaga detalle interno.
+    }
+  };
+
+  runProtectedSync();
+  const interval = setIntervalImpl(runProtectedSync, intervalMs);
+  try {
+    if (interval && typeof interval.unref === 'function') interval.unref();
+  } catch (_) {
+    // unref es una optimizacion de lifecycle, no una condicion funcional.
+  }
+
+  return Object.freeze({
+    stop() {
+      if (intervalCleared) return false;
+      stopped = true;
+      intervalCleared = true;
+      try {
+        clearIntervalImpl(interval);
+      } catch (_) {
+        // El flag impide nuevas ejecuciones aunque el timer inyectado falle.
+      }
+      return true;
+    },
+  });
 }
 
 module.exports = { isUserBlocked, membershipStatus, syncUserDevices, syncDevice, syncAll, startPeriodicSync };
