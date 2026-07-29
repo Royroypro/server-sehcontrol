@@ -321,8 +321,9 @@ addColumnIfMissing('device_screen_cam_settings', 'displays_updated_at', 'datetim
 
 // Sesiones temporales de previsualizacion de video (WebRTC). No se guarda
 // video ni fragmentos: esta tabla solo registra quien pidio ver que equipo,
-// cuando, y el token de publicacion de un solo uso (que expira). Sirve
-// ademas como registro de auditoria de quien abrio una vista en vivo.
+// cuando, y el token temporal de publicacion (reutilizable mientras la sesion
+// siga viva). stopped, failed y expired impiden nuevos handshakes. Sirve ademas
+// como registro de auditoria de quien abrio una vista en vivo.
 db.exec(`
   create table if not exists screen_cam_preview_sessions (
     id varchar(40) primary key,

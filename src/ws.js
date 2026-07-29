@@ -94,30 +94,36 @@ function initWebSocketServer(httpServer) {
 
 // Eventos cliente -> servidor. Se requiere `require` diferido porque
 // screenCamPreview importa este modulo (evita ciclo en tiempo de carga).
-function handleClientEvent(userId, msg, socket) {
+function handleClientEvent(userId, msg, socket, previewModule = null) {
   const event = msg?.event;
   if (typeof event !== 'string' || !event.startsWith('screen_cam.preview.')) return;
 
-  const preview = require('./screenCamPreview');
+  const preview = previewModule || require('./screenCamPreview');
   const sessionId = typeof msg.session_id === 'string' ? msg.session_id : null;
-  if (!sessionId) return;
+  const rustdeskId = typeof msg.rustdesk_id === 'string' ? msg.rustdesk_id : null;
+  if (!sessionId || sessionId.trim().length === 0
+    || !rustdeskId || rustdeskId.trim().length === 0) return;
 
   const statusByEvent = {
-    'screen_cam.preview.connecting': null, // informativo, no cambia estado
+    'screen_cam.preview.connecting': 'connecting', // informativo, no cambia estado
     'screen_cam.preview.started': 'publishing',
     'screen_cam.preview.failed': 'failed',
     'screen_cam.preview.stopped': 'stopped',
   };
   if (!(event in statusByEvent)) return;
   const status = statusByEvent[event];
-  if (!status) return;
 
   try {
-    const updated = preview.updateFromClient(sessionId, { status, error: msg.error });
+    const updated = preview.updateFromClientForUser(
+      userId,
+      sessionId,
+      rustdeskId,
+      { status, error: msg.error },
+    );
     if (updated) send(socket, { type: 'screen_cam.preview.state', data: updated });
   } catch (_) {
     // Un evento malformado del cliente no debe tumbar el websocket.
   }
 }
 
-module.exports = { initWebSocketServer, pushToUser, pushToAll };
+module.exports = { initWebSocketServer, pushToUser, pushToAll, handleClientEvent };
