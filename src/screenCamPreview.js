@@ -25,6 +25,43 @@ const EXPIRATION_CLEANUP_CONCURRENCY = 2;
 const CLEANUP_BACKLOG_WARNING = 25;
 const CLEANUP_BACKLOG_CRITICAL = 100;
 
+// Duracion de sesion configurable (Configuracion > ScreenCam, solo admin).
+// SESSION_TTL_SECONDS sigue siendo el default de toda la vida: una
+// instalacion que nunca toco el ajuste se comporta exactamente igual que
+// antes. Limites:
+//   MIN 60s  -- lo que tarda un cliente en reaccionar al WS, arrancar el
+//               capturador/encoder y completar el handshake SRT; menos que
+//               esto vuelve inutilizable la previsualizacion casi siempre.
+//   MAX 1800s (30 min) -- evita dejar una camara remota transmitiendo por
+//               tiempo indefinido si alguien se olvida el modal abierto.
+const PREVIEW_DURATION_MIN_SECONDS = 60;
+const PREVIEW_DURATION_MAX_SECONDS = 1800;
+const DEFAULT_PREVIEW_DURATION_SECONDS = SESSION_TTL_SECONDS;
+
+function isValidPreviewDurationSeconds(seconds) {
+  return Number.isInteger(seconds)
+    && seconds >= PREVIEW_DURATION_MIN_SECONDS
+    && seconds <= PREVIEW_DURATION_MAX_SECONDS;
+}
+
+// Sesiones YA CREADAS conservan su expires_at original (no se leen de nuevo
+// aca): esta funcion solo se consulta al crear una sesion nueva.
+function resolvePreviewDurationSeconds() {
+  try {
+    const row = db.prepare(
+      'select screen_cam_preview_duration_seconds from platform_settings where id = 1',
+    ).get();
+    if (!row || !isValidPreviewDurationSeconds(row.screen_cam_preview_duration_seconds)) {
+      return DEFAULT_PREVIEW_DURATION_SECONDS;
+    }
+    return row.screen_cam_preview_duration_seconds;
+  } catch (_) {
+    // Migracion no corrida todavia (columna ausente) u otra falla de
+    // lectura: nunca debe romper la creacion de una sesion nueva por esto.
+    return DEFAULT_PREVIEW_DURATION_SECONDS;
+  }
+}
+
 function mediaConfig() {
   return {
     publishUrl: process.env.MEDIA_PUBLISH_URL || null,
@@ -517,10 +554,13 @@ function startPreview(rustdeskId, requestedByUserId, options = {}) {
   const sessionId = `pv_${crypto.randomBytes(5).toString('hex')}`;
   const publishToken = crypto.randomBytes(24).toString('base64url');
   const readToken = crypto.randomBytes(24).toString('base64url');
+  // La duracion se resuelve UNA vez, al crear la sesion: cambiar el ajuste
+  // despues no debe alterar expires_at de sesiones ya creadas.
+  const durationSeconds = resolvePreviewDurationSeconds();
   db.prepare(`
     insert into screen_cam_preview_sessions (id, rustdesk_id, requested_by, status, publish_token, read_token, expires_at)
-    values (?, ?, ?, 'waiting_client', ?, ?, datetime('now', '+${SESSION_TTL_SECONDS} seconds'))
-  `).run(sessionId, rustdeskId, requestedByUserId, publishToken, readToken);
+    values (?, ?, ?, 'waiting_client', ?, ?, datetime('now', '+' || ? || ' seconds'))
+  `).run(sessionId, rustdeskId, requestedByUserId, publishToken, readToken, durationSeconds);
 
   notifications.logActivity(requestedByUserId, 'screen_cam_preview_started', 'device', rustdeskId,
     JSON.stringify({ session_id: sessionId }));
@@ -539,7 +579,7 @@ function startPreview(rustdeskId, requestedByUserId, options = {}) {
       // El nombre del stream que debe publicar: uno por sesion, para que un
       // token filtrado no sirva para mirar otra cosa ni despues de cerrada.
       stream_name: sessionId,
-      expires_in: SESSION_TTL_SECONDS,
+      expires_in: durationSeconds,
     },
   });
 
@@ -804,6 +844,11 @@ function authorizeMedia({
 
 module.exports = {
   SESSION_TTL_SECONDS,
+  PREVIEW_DURATION_MIN_SECONDS,
+  PREVIEW_DURATION_MAX_SECONDS,
+  DEFAULT_PREVIEW_DURATION_SECONDS,
+  isValidPreviewDurationSeconds,
+  resolvePreviewDurationSeconds,
   MAX_CLEANUP_ATTEMPTS,
   EXPIRATION_CLEANUP_CONCURRENCY,
   CLEANUP_BACKLOG_WARNING,

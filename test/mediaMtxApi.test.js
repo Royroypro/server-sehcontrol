@@ -966,3 +966,104 @@ test('mezcla de exito, 404 y fallo nunca afirma kicked', async () => {
     error: 'partial_failure',
   }));
 });
+
+// ---------- isPathPublisherReady (Tarea 2: deteccion de disponibilidad) ----------
+
+test('devuelve ready=true solo cuando MediaMTX confirma source con al menos una pista', async () => {
+  await withServer((req, res) => {
+    assert.strictEqual(req.method, 'GET');
+    assert.strictEqual(req.url, '/v3/paths/get/pv_abc123');
+    sendJson(res, 200, {
+      name: 'pv_abc123',
+      ready: true,
+      source: { type: 'srtSource' },
+      tracks: ['H264'],
+      readers: [{ type: 'webRTCSession', id: 'secret-reader-id' }],
+      bytesReceived: 123456,
+    });
+  }, async (apiUrl) => {
+    const result = await mediaApi.isPathPublisherReady('pv_abc123', { apiUrl });
+    assert.deepStrictEqual(result, { ready: true, error: null });
+  });
+});
+
+test('devuelve ready=false (sin error) cuando el path todavia no existe (404)', async () => {
+  await withServer((req, res) => {
+    res.writeHead(404);
+    res.end();
+  }, async (apiUrl) => {
+    const result = await mediaApi.isPathPublisherReady('pv_not_started', { apiUrl });
+    assert.deepStrictEqual(result, { ready: false, error: null });
+  });
+});
+
+test('ready=false cuando MediaMTX dice ready:false aunque el path ya exista', async () => {
+  await withServer((req, res) => {
+    sendJson(res, 200, { name: 'pv_x', ready: false, source: null, tracks: [] });
+  }, async (apiUrl) => {
+    const result = await mediaApi.isPathPublisherReady('pv_x', { apiUrl });
+    assert.deepStrictEqual(result, { ready: false, error: null });
+  });
+});
+
+test('ready=false cuando hay source/ready pero sin ninguna pista todavia', async () => {
+  await withServer((req, res) => {
+    sendJson(res, 200, { name: 'pv_x', ready: true, source: { type: 'srtSource' }, tracks: [] });
+  }, async (apiUrl) => {
+    const result = await mediaApi.isPathPublisherReady('pv_x', { apiUrl });
+    assert.deepStrictEqual(result, { ready: false, error: null });
+  });
+});
+
+test('ready=null (desconocido) ante una respuesta 500 del gateway', async () => {
+  await withServer((req, res) => {
+    res.writeHead(500);
+    res.end();
+  }, async (apiUrl) => {
+    const result = await mediaApi.isPathPublisherReady('pv_x', { apiUrl });
+    assert.deepStrictEqual(result, { ready: null, error: mediaApi.ERRORS.LIST_FAILED });
+  });
+});
+
+test('ready=null ante una respuesta que no es JSON valido', async () => {
+  await withServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('esto no es json');
+  }, async (apiUrl) => {
+    const result = await mediaApi.isPathPublisherReady('pv_x', { apiUrl });
+    assert.deepStrictEqual(result, { ready: null, error: mediaApi.ERRORS.INVALID_RESPONSE });
+  });
+});
+
+test('ready=null y ninguna solicitud sale si la URL no es loopback (SSRF)', async () => {
+  const fetchImpl = async () => { throw new Error('no deberia llamarse nunca'); };
+  const result = await mediaApi.isPathPublisherReady('pv_x', {
+    apiUrl: 'http://attacker.example:9997',
+    fetchImpl,
+  });
+  assert.deepStrictEqual(result, { ready: null, error: mediaApi.ERRORS.INVALID_API_URL });
+});
+
+test('nunca se filtra el cuerpo crudo (lectores, bytes, IPs): solo el booleano derivado', async () => {
+  await withServer((req, res) => {
+    sendJson(res, 200, {
+      ready: true,
+      source: { type: 'srtSource' },
+      tracks: ['H264'],
+      readers: [{ type: 'webRTCSession', id: 'reader-1' }],
+      bytesReceived: 999,
+      bytesSent: 111,
+    });
+  }, async (apiUrl) => {
+    const result = await mediaApi.isPathPublisherReady('pv_x', { apiUrl });
+    assert.deepStrictEqual(Object.keys(result).sort(), ['error', 'ready']);
+  });
+});
+
+test('un path vacio o invalido no genera ninguna solicitud', async () => {
+  const fetchImpl = async () => { throw new Error('no deberia llamarse nunca'); };
+  for (const invalid of ['', null, undefined, 42]) {
+    const result = await mediaApi.isPathPublisherReady(invalid, { fetchImpl });
+    assert.deepStrictEqual(result, { ready: null, error: mediaApi.ERRORS.INVALID_API_URL });
+  }
+});

@@ -1168,6 +1168,38 @@ sin revelar si el identificador pertenece a otro dispositivo. La consulta requie
 autenticación administrativa, es de solo lectura y permite consultar tanto sesiones activas
 como terminales (`stopped`, `failed` o `expired`).
 
+Desde la mejora de reintento WHEP, el GET además incluye `playback_ready` (booleano):
+
+```json
+{
+  "session_id": "pv_8f12ab34c5",
+  "device_id": "485236790",
+  "status": "ready",
+  "expires_in": 296,
+  "playback_url": "https://sehcontrol.sehuacho.com/media/pv_8f12ab34c5/whep?token=...",
+  "playback_ready": true,
+  "error": null
+}
+```
+
+`playback_ready` es un enriquecimiento que el backend calcula consultando a MediaMTX
+(`GET /v3/paths/get/{name}`, solo desde el servidor, nunca desde el navegador) si el path
+YA tiene un publisher confirmado con al menos una pista. Es **solo una optimización**: el
+panel usa `false` para esperar un poco más antes de abrir la primera `RTCPeerConnection` y
+evitar 404 innecesarios contra WHEP, pero el reintento de WHEP (ver `screenCamPreview.js`
+del panel) sigue siendo la red de seguridad real si esta consulta falla, da error o no está
+disponible (se resuelve como "seguir adelante", nunca como bloqueo). Cuando `status` no es
+`ready` o no hay `playback_url` todavía, `playback_ready` siempre es `false` sin necesidad
+de consultar a MediaMTX.
+
+**Duración de la sesión, configurable por el admin**: el límite que antes estaba fijo en
+300 segundos (5 minutos) ahora se lee de `platform_settings.screen_cam_preview_duration_seconds`,
+editable desde el panel (Configuración → "Previsualización de ScreenCam", en minutos) o vía
+`PUT /api/admin/settings` con `screen_cam_preview_duration_seconds` (en segundos, entero,
+entre 60 y 1800). Solo aplica a sesiones creadas DESPUÉS del cambio: `expires_in`/`expires_at`
+de una sesión ya abierta no se alteran. Requiere rol admin (403 para cualquier otro rol); un
+cambio queda auditado en `activity_log` como `screen_cam_preview_duration_updated`.
+
 Al crear la sesión, el servidor les empuja por WebSocket:
 
 ```json

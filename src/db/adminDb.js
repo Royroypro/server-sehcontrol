@@ -166,6 +166,13 @@ addColumnIfMissing('platform_settings', 'whatsapp_number', 'varchar(50)');
 // (expiry_warning). JSON array de enteros, ej. '[10,7,5,3,1]'. Configurable
 // desde el panel (Configuracion) -- ver src/notifications.js generateExpiryAlerts.
 addColumnIfMissing('platform_settings', 'expiry_warning_days', "text not null default '[10,7,5,3,1]'");
+// Duracion maxima de una sesion de previsualizacion de ScreenCam, en
+// segundos. El default (300 = 5 minutos) es el mismo limite que ya regia
+// hardcodeado en src/screenCamPreview.js -- este cambio no altera el
+// comportamiento de ninguna instalacion existente hasta que un admin lo
+// edite explicitamente desde Configuracion. Limites en
+// src/screenCamPreview.js (PREVIEW_DURATION_MIN_SECONDS/MAX_SECONDS).
+addColumnIfMissing('platform_settings', 'screen_cam_preview_duration_seconds', 'integer not null default 300');
 // Tags de la libreta de direcciones "legacy" (categorias "Cabinas"/"Clientes"
 // que pide el cliente). JSON array de strings, ej. '["Cabinas"]'.
 addColumnIfMissing('devices', 'tags', "text not null default '[]'");

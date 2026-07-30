@@ -562,6 +562,11 @@ async function changeScreenCamDisplay(rustdeskId, ownerId, select) {
 
 // ---------- Previsualizacion de video (WebRTC / WHEP) ----------
 let PREVIEW_STATE = null;
+// Mientras MediaMTX todavia no confirma publisher (playback_ready === false)
+// se sigue consultando rapido pero SIN abrir PeerConnection todavia -- evita
+// 404 innecesarios contra WHEP. El resto de los casos usa el intervalo lento.
+const PREVIEW_FAST_POLL_MS = 400;
+const PREVIEW_SLOW_POLL_MS = 1500;
 
 async function openScreenCamPreview(rustdeskId) {
   if (PREVIEW_STATE) return;
@@ -585,13 +590,13 @@ async function openScreenCamPreview(rustdeskId) {
   const state = {
     rustdeskId,
     sessionId: null,
-    pc: null,
+    controller: null,
     poll: null,
     timer: null,
     deadline: null,
     requestAbort: new AbortController(),
-    whepAbort: null,
     beaconSent: false,
+    previewRequestedAt: Date.now(),
   };
   PREVIEW_STATE = state;
 
@@ -623,8 +628,14 @@ function setPreviewStatus(text, isError) {
   if (el) { el.textContent = text; el.style.color = isError ? 'var(--danger)' : 'var(--muted)'; }
 }
 
+function isPreviewSessionActive(state) {
+  return PREVIEW_STATE === state && !!state.sessionId;
+}
+
 // El cliente tarda en conectarse al gateway; se consulta el estado de la
-// sesion hasta que quede "ready" (o falle/expire).
+// sesion hasta que MediaMTX confirme publisher (o falle/expire). Una vez hay
+// un controller de WHEP activo (ver screenCamPreview.js), es EL QUIEN decide
+// sus propios reintentos/backoff -- el poll solo vigila el fin de sesion.
 function startPreviewPolling(state) {
   if (PREVIEW_STATE !== state) return;
   state.timer = setInterval(() => {
@@ -636,64 +647,59 @@ function startPreviewPolling(state) {
   }, 1000);
 
   const poll = async () => {
-    if (PREVIEW_STATE !== state) return;
+    if (!isPreviewSessionActive(state)) return;
     try {
       const s = await api(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}`);
-      if (PREVIEW_STATE !== state) return;
-      if (s.status === 'ready' && s.playback_url && !state.pc) {
-        setPreviewStatus('Preparando video…');
-        await startWhepPlayback(s.playback_url, state);
-        return;
-      } else if (['failed', 'expired', 'stopped'].includes(s.status)) {
+      if (!isPreviewSessionActive(state)) return;
+      if (['failed', 'expired', 'stopped'].includes(s.status)) {
+        state.controller?.cancel();
+        state.controller = null;
         setPreviewStatus(`La sesion termino (${s.status})${s.error ? `: ${s.error}` : ''}`, true);
         return;
       }
+      if (s.status === 'ready' && s.playback_url && !state.controller) {
+        if (s.playback_ready === false) {
+          // MediaMTX confirma que todavia no hay publisher: se espera sin
+          // abrir PeerConnection (los 404 durante esta fase no son un error
+          // definitivo, pero tampoco hace falta provocarlos).
+          if (PREVIEW_STATE === state) state.poll = setTimeout(poll, PREVIEW_FAST_POLL_MS);
+          return;
+        }
+        startWhepController(s.playback_url, state);
+        return; // el controller queda vivo por su cuenta (reintentos/frame)
+      }
     } catch (_) { /* reintenta en el proximo tick */ }
-    if (PREVIEW_STATE === state) state.poll = setTimeout(poll, 1500);
+    if (PREVIEW_STATE === state) state.poll = setTimeout(poll, PREVIEW_SLOW_POLL_MS);
   };
   state.poll = setTimeout(poll, 0);
 }
 
-// WHEP: se manda la oferta SDP por POST y el gateway devuelve la respuesta.
-async function startWhepPlayback(whepUrl, state) {
-  try {
-    const pc = new RTCPeerConnection();
-    if (PREVIEW_STATE !== state) {
-      pc.close();
-      return;
-    }
-    state.pc = pc;
-    state.whepAbort = new AbortController();
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.ontrack = (ev) => {
-      if (PREVIEW_STATE !== state) return;
+// Arma el controller de WHEP (reintento con backoff, invariantes de una sola
+// PeerConnection/fetch/timer, y el "gate" que oculta el video hasta el
+// primer frame real). El panel solo reacciona a sus callbacks.
+function startWhepController(whepUrl, state) {
+  state.controller = ScreenCamPreview.createWhepController({
+    whepUrl,
+    getVideoElement: () => document.getElementById('pvVideo'),
+    isSessionActive: () => isPreviewSessionActive(state),
+    onStatus: (text, isError) => { if (isPreviewSessionActive(state)) setPreviewStatus(text, isError); },
+    onFirstFrame: () => {
+      if (!isPreviewSessionActive(state)) return;
       const video = document.getElementById('pvVideo');
-      if (video) { video.srcObject = ev.streams[0]; video.style.display = 'block'; }
-      setPreviewStatus('En vivo');
-    };
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await ScreenCamPreview.waitForIceGatheringComplete(pc);
-    if (PREVIEW_STATE !== state) return;
-    const res = await fetch(whepUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/sdp',
-        Accept: 'application/sdp',
-      },
-      body: ScreenCamPreview.localOfferSdp(pc),
-      signal: state.whepAbort.signal,
-    });
-    if (!res.ok) throw new Error(`El gateway rechazo la reproduccion (${res.status})`);
-    if (PREVIEW_STATE !== state) return;
-    await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
-  } catch (e) {
-    if (PREVIEW_STATE === state && e.name !== 'AbortError') {
-      state.pc?.close();
-      state.pc = null;
-      setPreviewStatus(`No se pudo reproducir: ${e.message}`, true);
-    }
-  }
+      if (video) video.style.display = 'block';
+    },
+    onTerminal: (reason) => {
+      if (isPreviewSessionActive(state) && (reason === 'fatal_failure' || reason === 'congestion_retry_limit')) {
+        setPreviewStatus('No se pudo reproducir la senal', true);
+      }
+      if (state.controller) state.controller = null;
+    },
+    onTiming: (marks, durations) => {
+      // Solo duraciones: nunca se registra la URL de WHEP ni el token.
+      if (Object.keys(durations).length) console.log('[screencam] tiempos de previsualizacion', durations);
+    },
+  });
+  state.controller.start(state.previewRequestedAt);
 }
 
 async function closeScreenCamPreview() {
@@ -701,10 +707,10 @@ async function closeScreenCamPreview() {
   PREVIEW_STATE = null;
   if (state) {
     state.requestAbort.abort();
-    state.whepAbort?.abort();
     clearTimeout(state.poll);
     clearInterval(state.timer);
-    state.pc?.close();
+    state.controller?.cancel();
+    state.controller = null;
     if (state.sessionId) {
       try {
         await api(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}`, { method: 'DELETE' });
@@ -1063,6 +1069,18 @@ async function renderSettings() {
     </div>
 
     <div class="card" style="max-width:520px;margin-bottom:20px;">
+      <h2 style="font-size:15px;margin-top:0;">Previsualizacion de ScreenCam</h2>
+      <p class="settings-help">Duracion maxima de cada sesion de previsualizacion en vivo. Se aplica a las sesiones NUEVAS; las que ya estan abiertas conservan su tiempo original. Minimo 1 minuto, maximo 30 minutos.</p>
+      <form id="previewDurationForm">
+        <label>Duracion (minutos)</label>
+        <input name="preview_duration_minutes" type="number" min="1" max="30" step="1" required>
+        <div class="error" id="previewDurationErr"></div>
+        <div class="msg-ok" id="previewDurationOk" style="display:none;">Guardado.</div>
+        <button type="submit" style="margin-top:14px;">Guardar</button>
+      </form>
+    </div>
+
+    <div class="card" style="max-width:520px;margin-bottom:20px;">
       <h2 style="font-size:15px;margin-top:0;">Key de Sehcontrol</h2>
       <p class="settings-help">Esta es la key publica que deben usar los clientes para conectarse a este servidor.</p>
       <label>Key publica actual</label>
@@ -1142,9 +1160,39 @@ async function renderSettings() {
       if (Array.isArray(parsed) && parsed.length) expiryDays = parsed;
     } catch (_) { /* usar el default si viene invalido */ }
     document.getElementById('expiryForm').expiry_warning_days.value = expiryDays.join(',');
+
+    const previewSeconds = Number(settings.screen_cam_preview_duration_seconds);
+    const previewMinutes = Number.isFinite(previewSeconds) && previewSeconds > 0
+      ? Math.round(previewSeconds / 60) || 1
+      : 5;
+    document.getElementById('previewDurationForm').preview_duration_minutes.value = previewMinutes;
   } catch (e) {
     document.getElementById('platformErr').textContent = e.message;
   }
+
+  document.getElementById('previewDurationForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const okEl = document.getElementById('previewDurationOk');
+    const errEl = document.getElementById('previewDurationErr');
+    okEl.style.display = 'none';
+    errEl.textContent = '';
+    const minutes = Number(f.preview_duration_minutes.value);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 30) {
+      errEl.textContent = 'Ingresa un numero entero de minutos entre 1 y 30';
+      return;
+    }
+    try {
+      SETTINGS = await api('/api/admin/settings', {
+        method: 'PUT',
+        body: { screen_cam_preview_duration_seconds: minutes * 60 },
+      });
+      f.preview_duration_minutes.value = Math.round(SETTINGS.screen_cam_preview_duration_seconds / 60);
+      okEl.style.display = 'block';
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  });
 
   document.getElementById('expiryForm').addEventListener('submit', async (e) => {
     e.preventDefault();

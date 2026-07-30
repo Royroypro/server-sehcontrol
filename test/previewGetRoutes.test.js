@@ -105,7 +105,12 @@ test('admin + combinacion correcta devuelve 200 con el contrato publico vigente'
   );
 
   assert.strictEqual(response.status, 200);
-  assert.deepStrictEqual(response.body, expected);
+  // playback_ready es un enriquecimiento del handler HTTP (Tarea 2): no
+  // esta en lo que devuelve updateFromClientForUser directamente. En este
+  // entorno de pruebas no hay MediaMTX real escuchando en 9997, asi que la
+  // consulta de disponibilidad falla y se resuelve "desconocido" -> true
+  // (fail-open: nunca debe bloquear la reproduccion).
+  assert.deepStrictEqual(response.body, { ...expected, playback_ready: true });
   assert.ok(response.body.playback_url);
   assert.ok(!Object.hasOwn(response.body, 'publish_token'));
   assert.ok(!Object.hasOwn(response.body, 'read_token'));
@@ -154,7 +159,9 @@ test('escenario A/session B no filtra ni modifica B y la combinacion B/B funcion
   assert.strictEqual(crossed.status, 404);
   assert.deepStrictEqual(crossed.body, { error: 'Sesion no encontrada' });
   assert.strictEqual(correct.status, 200);
-  assert.deepStrictEqual(correct.body, b.session);
+  // Sesion en 'waiting_client' (todavia sin playback_url): playback_ready
+  // es false sin necesidad de consultar a MediaMTX.
+  assert.deepStrictEqual(correct.body, { ...b.session, playback_ready: false });
   assert.deepStrictEqual(getSessionRow(a.session.session_id), beforeA);
   assert.deepStrictEqual(getSessionRow(b.session.session_id), beforeB);
   assert.strictEqual(activityCount(), activityBefore);

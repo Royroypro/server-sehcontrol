@@ -13,6 +13,7 @@ const { pushToAll } = require('../ws');
 const clientDownload = require('../clientDownload');
 const screenCamPolicy = require('../screenCamPolicy');
 const screenCamPreview = require('../screenCamPreview');
+const mediaMtxApi = require('../mediaMtxApi');
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -26,6 +27,7 @@ router.put('/settings', (req, res) => {
   const {
     business_name, tax_id, address, phone, whatsapp_number, contact_email, default_currency, language,
     expiry_warning_days: expiryWarningDays,
+    screen_cam_preview_duration_seconds: previewDurationSeconds,
   } = req.body || {};
   const current = db.prepare('select * from platform_settings where id = 1').get();
 
@@ -37,10 +39,24 @@ router.put('/settings', (req, res) => {
     expiryWarningDaysJson = JSON.stringify([...new Set(expiryWarningDays)].sort((a, b) => b - a));
   }
 
+  // Duracion de las sesiones de previsualizacion de ScreenCam: solo aplica a
+  // sesiones NUEVAS (ver src/screenCamPreview.js resolvePreviewDurationSeconds).
+  // Las ya creadas conservan su expires_at original.
+  let previewDuration = current.screen_cam_preview_duration_seconds;
+  if (previewDurationSeconds !== undefined) {
+    if (!screenCamPreview.isValidPreviewDurationSeconds(previewDurationSeconds)) {
+      return res.status(400).json({
+        error: `screen_cam_preview_duration_seconds debe ser un entero entre ${screenCamPreview.PREVIEW_DURATION_MIN_SECONDS} y ${screenCamPreview.PREVIEW_DURATION_MAX_SECONDS}`,
+      });
+    }
+    previewDuration = previewDurationSeconds;
+  }
+
   db.prepare(`
     update platform_settings set
       business_name = ?, tax_id = ?, address = ?, phone = ?, whatsapp_number = ?, contact_email = ?,
-      default_currency = ?, language = ?, expiry_warning_days = ?, updated_at = datetime('now')
+      default_currency = ?, language = ?, expiry_warning_days = ?,
+      screen_cam_preview_duration_seconds = ?, updated_at = datetime('now')
     where id = 1
   `).run(
     business_name ?? current.business_name,
@@ -52,8 +68,20 @@ router.put('/settings', (req, res) => {
     default_currency || current.default_currency,
     language || current.language,
     expiryWarningDaysJson,
+    previewDuration,
   );
   notifications.logActivity(req.user.sub, 'settings_updated', 'platform_settings', 1, business_name || null);
+  if (previewDurationSeconds !== undefined && previewDuration !== current.screen_cam_preview_duration_seconds) {
+    // Auditoria especifica del limite (recomendado: quien cambio que valor).
+    // Sin datos sensibles: solo los dos enteros involucrados.
+    notifications.logActivity(
+      req.user.sub,
+      'screen_cam_preview_duration_updated',
+      'platform_settings',
+      1,
+      JSON.stringify({ from: current.screen_cam_preview_duration_seconds, to: previewDuration }),
+    );
+  }
   res.json(db.prepare('select * from platform_settings where id = 1').get());
 });
 
@@ -566,18 +594,57 @@ router.post(
   createScreenCamPreviewStartHandler(),
 );
 
-router.get('/devices/:rustdeskId/screen-cam/preview/:sessionId', (req, res) => {
-  try {
-    const session = screenCamPreview.getPreviewForDevice(
-      String(req.params.sessionId),
-      String(req.params.rustdeskId),
-    );
-    if (!session) return res.status(404).json({ error: 'Sesion no encontrada' });
-    return res.json(session);
-  } catch {
-    return res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
+// Enriquecimiento de disponibilidad (Tarea 2): ademas del status persistido
+// en SQLite, se consulta a MediaMTX (solo desde el backend, nunca desde el
+// navegador) si el path YA tiene un publisher con pista de video. Es una
+// optimizacion para que el panel no dispare WHEP antes de tiempo -- el
+// reintento de WHEP sigue siendo la red de seguridad real si esto falla o
+// no esta disponible, por eso null/error se tratan como "seguir adelante".
+function createScreenCamPreviewGetHandler(options = {}) {
+  const getPreviewForDevice = typeof options.getPreviewForDevice === 'function'
+    ? options.getPreviewForDevice
+    : (...args) => screenCamPreview.getPreviewForDevice(...args);
+  const isPathPublisherReady = typeof options.isPathPublisherReady === 'function'
+    ? options.isPathPublisherReady
+    : (...args) => mediaMtxApi.isPathPublisherReady(...args);
+  const logger = typeof options.logger === 'function'
+    ? options.logger
+    : (message) => console.warn(message);
+
+  return async (req, res) => {
+    try {
+      const sessionId = String(req.params.sessionId);
+      const rustdeskId = String(req.params.rustdeskId);
+      const session = getPreviewForDevice(sessionId, rustdeskId);
+      if (!session) return res.status(404).json({ error: 'Sesion no encontrada' });
+
+      if (session.status === 'ready' && session.playback_url) {
+        let ready = null;
+        try {
+          ({ ready } = await isPathPublisherReady(sessionId, options.mediaApiOptions));
+        } catch (_) {
+          ready = null;
+        }
+        // false === MediaMTX confirma que todavia no hay publisher; cualquier
+        // otro resultado (true o desconocido) deja avanzar al panel.
+        session.playback_ready = ready !== false;
+      } else {
+        session.playback_ready = false;
+      }
+      return res.json(session);
+    } catch (err) {
+      try {
+        logger('[screencam] operation=screen-cam-preview-get code=internal_error');
+      } catch (_) { /* la respuesta HTTP no depende del logger */ }
+      return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  };
+}
+
+router.get(
+  '/devices/:rustdeskId/screen-cam/preview/:sessionId',
+  createScreenCamPreviewGetHandler(),
+);
 
 router.delete('/devices/:rustdeskId/screen-cam/preview/:sessionId', async (req, res) => {
   try {
@@ -823,4 +890,5 @@ router.get('/activity', (req, res) => {
 
 module.exports = router;
 module.exports.createScreenCamPreviewStartHandler = createScreenCamPreviewStartHandler;
+module.exports.createScreenCamPreviewGetHandler = createScreenCamPreviewGetHandler;
 module.exports.screenCamPreviewStartError = screenCamPreviewStartError;

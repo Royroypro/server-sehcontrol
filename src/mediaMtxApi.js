@@ -292,8 +292,70 @@ async function kickSrtPublishersForPath(path, options = {}) {
   };
 }
 
+// Consulta si el path de una sesion ya tiene un publisher confirmado por
+// MediaMTX con al menos una pista. Se usa SOLO como optimizacion para
+// decidir cuando conviene intentar el primer WHEP: el reintento de WHEP en
+// el panel (ver public/admin/screenCamPreview.js) sigue siendo la red de
+// seguridad real, este chequeo nunca debe bloquear la reproduccion si falla.
+//
+//   GET /v3/paths/get/{name} -> { name, ready, tracks, source, ... }
+//
+// Devuelve { ready: true|false|null, error }.
+//   ready === true  -> hay un source activo con al menos una pista.
+//   ready === false -> el path no existe todavia (404, caso normal mientras
+//                      el cliente arranca) o MediaMTX dice que no esta listo.
+//   ready === null  -> no se pudo determinar (timeout, URL invalida,
+//                      respuesta invalida): "desconocido", nunca un error
+//                      fatal para el llamador.
+// Nunca se devuelve el cuerpo crudo de la respuesta: solo el booleano
+// derivado. La lista de lectores/bytes/IPs de MediaMTX no debe salir de aca.
+async function isPathPublisherReady(path, options = {}) {
+  const {
+    apiUrl = process.env.MEDIA_API_URL || DEFAULT_API_URL,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    fetchImpl = globalThis.fetch,
+  } = options;
+
+  if (typeof path !== 'string' || !path) return { ready: null, error: ERRORS.INVALID_API_URL };
+
+  const baseUrl = resolveApiUrl(apiUrl);
+  if (!baseUrl) return { ready: null, error: ERRORS.INVALID_API_URL };
+  if (typeof fetchImpl !== 'function') return { ready: null, error: ERRORS.LIST_FAILED };
+
+  const url = `${baseUrl}/v3/paths/get/${encodeURIComponent(path)}`;
+  let res;
+  try {
+    res = await fetchImpl(url, {
+      method: 'GET',
+      redirect: 'error',
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { Accept: 'application/json' },
+    });
+  } catch (err) {
+    return { ready: null, error: isTimeoutError(err) ? ERRORS.TIMEOUT : ERRORS.LIST_FAILED };
+  }
+
+  // El path todavia no existe: es el estado normal mientras el cliente
+  // arranca el encoder y abre la conexion SRT. No es un error.
+  if (res.status === 404) return { ready: false, error: null };
+  if (!res.ok) return { ready: null, error: ERRORS.LIST_FAILED };
+
+  let body;
+  try {
+    body = await res.json();
+  } catch (_) {
+    return { ready: null, error: ERRORS.INVALID_RESPONSE };
+  }
+  if (!body || typeof body !== 'object') return { ready: null, error: ERRORS.INVALID_RESPONSE };
+
+  const trackCount = Array.isArray(body.tracks) ? body.tracks.length : 0;
+  const ready = body.ready === true && body.source != null && trackCount > 0;
+  return { ready, error: null };
+}
+
 module.exports = {
   kickSrtPublishersForPath,
+  isPathPublisherReady,
   resolveApiUrl,
   DEFAULT_API_URL,
   DEFAULT_TIMEOUT_MS,
