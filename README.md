@@ -41,6 +41,26 @@ El panel queda en `http://<servidor>:8899/admin/`. Los clientes RustDesk usan
 el valor de `RUSTDESK_RELAY_HOST` como servidor ID/relay y la clave publica
 generada en `rustdesk-data/id_ed25519.pub`.
 
+### Sesiones del cliente nativo
+
+El panel web conserva una cookie JWT de 12 horas. El cliente nativo Sehcontrol
+recibe una sesión opaca persistente, almacenada localmente en el mismo campo
+`access_token` que ya utiliza el cliente. Por eso no requiere un flujo nuevo de
+inicio de sesión ni cambios de protocolo.
+
+El servidor guarda solamente el hash SHA-256 del token. La sesión:
+
+- vence después de `NATIVE_SESSION_TTL_DAYS` días sin uso;
+- renueva su vencimiento como máximo una vez cada
+  `NATIVE_SESSION_TOUCH_INTERVAL_HOURS` horas;
+- queda vinculada al usuario y, cuando está disponible, al equipo;
+- se revoca al cerrar sesión, cambiar la contraseña o suspender la cuenta.
+
+Los valores predeterminados son 90 días de inactividad y una actualización
+máxima cada 24 horas. Se aceptan entre 1 y 365 días, y entre 1 y 168 horas,
+respectivamente. Los JWT nativos emitidos antes de esta migración continúan
+funcionando únicamente hasta completar sus 12 horas originales.
+
 El despliegue usa red host, recomendada por la documentacion oficial de
 RustDesk para Linux. Deben estar permitidos:
 

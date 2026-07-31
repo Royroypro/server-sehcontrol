@@ -345,4 +345,30 @@ db.exec(`
 // un token filtrado de un lado no sirve para el otro.
 addColumnIfMissing('screen_cam_preview_sessions', 'read_token', 'varchar(100)');
 
+
+// Sesiones persistentes del cliente nativo Sehcontrol.
+//
+// El token real nunca se guarda: solamente su SHA-256. rustdesk_id no tiene
+// clave foranea porque puede cambiar cuando el cliente se reinstala. La
+// pertenencia actual del dispositivo se comprueba al validar la sesion.
+db.exec(`
+  create table if not exists native_sessions (
+    id varchar(36) primary key,
+    token_hash varchar(64) not null unique,
+    user_id integer not null references users(id) on delete cascade,
+    rustdesk_id varchar(100),
+    machine_id varchar(200),
+    expires_at datetime not null,
+    last_used_at datetime not null default (current_timestamp),
+    revoked_at datetime,
+    created_at datetime not null default (current_timestamp)
+  );
+
+  create index if not exists idx_native_sessions_user
+    on native_sessions(user_id, revoked_at);
+
+  create index if not exists idx_native_sessions_device
+    on native_sessions(rustdesk_id, revoked_at);
+`);
+
 module.exports = db;

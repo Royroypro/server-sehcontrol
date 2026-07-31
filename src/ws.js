@@ -4,17 +4,19 @@
 // docs/CLIENT_INTEGRATION.md sigue siendo valido como respaldo (si el
 // websocket se cae, reconecta) pero ya no es la unica via.
 const { WebSocketServer } = require('ws');
-const jwt = require('jsonwebtoken');
+const { authenticateBearerToken } = require('./auth');
 const rustdeskKey = require('./rustdeskKey');
-
-const JWT_SECRET = process.env.JWT_SECRET;
 
 // user_id -> Set<WebSocket>. Un mismo usuario puede tener varias conexiones
 // (varios dispositivos/clientes logueados a la vez).
 const connections = new Map();
 
-function addConnection(userId, ws) {
+function addConnection(userId, ws, authContext) {
   if (!connections.has(userId)) connections.set(userId, new Set());
+
+  // Contexto usado para cerrar inmediatamente conexiones cuya sesión,
+  // dispositivo o usuario fueron revocados.
+  ws.authContext = authContext;
   connections.get(userId).add(ws);
 }
 
@@ -27,6 +29,53 @@ function removeConnection(userId, ws) {
 
 function send(ws, payload) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
+}
+
+function closeMatchingConnections(predicate) {
+  let closed = 0;
+
+  for (const [userId, set] of connections.entries()) {
+    for (const ws of [...set]) {
+      if (!predicate(ws.authContext || {}, userId)) continue;
+
+      closed += 1;
+
+      if (ws.readyState === ws.OPEN) {
+        ws.close(4002, 'Sesion revocada');
+      } else {
+        removeConnection(userId, ws);
+      }
+    }
+  }
+
+  return closed;
+}
+
+function closeUserConnections(userId) {
+  return closeMatchingConnections(
+    (_, connectedUserId) =>
+      Number(connectedUserId) === Number(userId)
+  );
+}
+
+function closeNativeSessionConnections(sessionId) {
+  if (!sessionId) return 0;
+
+  return closeMatchingConnections(
+    (auth) =>
+      auth.auth_type === 'native_session' &&
+      auth.session_id === sessionId
+  );
+}
+
+function closeDeviceConnections(userId, rustdeskId) {
+  if (!rustdeskId) return 0;
+
+  return closeMatchingConnections(
+    (auth, connectedUserId) =>
+      Number(connectedUserId) === Number(userId) &&
+      auth.rustdesk_id === rustdeskId
+  );
 }
 
 // Manda a un usuario especifico (todas sus conexiones abiertas).
@@ -51,17 +100,22 @@ function initWebSocketServer(httpServer) {
 
   wss.on('connection', (ws, req) => {
     let userId = null;
+    let authContext = null;
+
     try {
       const url = new URL(req.url, 'http://localhost');
       const token = url.searchParams.get('token');
-      const payload = jwt.verify(token, JWT_SECRET);
+      const payload = authenticateBearerToken(token);
+      if (!payload) throw new Error('Sesion no encontrada');
+
+      authContext = payload;
       userId = payload.sub;
     } catch (_) {
       ws.close(4001, 'Token invalido o ausente');
       return;
     }
 
-    addConnection(userId, ws);
+    addConnection(userId, ws, authContext);
     let serverKey = null;
     try {
       serverKey = rustdeskKey.getPublicKeyInfo();
@@ -120,4 +174,11 @@ function handleClientEvent(userId, msg, socket) {
   }
 }
 
-module.exports = { initWebSocketServer, pushToUser, pushToAll };
+module.exports = {
+  initWebSocketServer,
+  pushToUser,
+  pushToAll,
+  closeUserConnections,
+  closeNativeSessionConnections,
+  closeDeviceConnections,
+};

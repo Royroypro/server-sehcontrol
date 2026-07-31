@@ -16,7 +16,12 @@ const hbbsDb = require('../db/hbbsDb');
 const deviceClaim = require('../deviceClaim');
 const notifications = require('../notifications');
 const screenCamPolicy = require('../screenCamPolicy');
-const { verifyPassword, issueToken, requireBearerAuth } = require('../auth');
+const nativeSessions = require('../nativeSessions');
+const {
+  closeNativeSessionConnections,
+  closeDeviceConnections,
+} = require('../ws');
+const { verifyPassword, requireBearerAuth } = require('../auth');
 
 const router = express.Router();
 
@@ -137,14 +142,15 @@ router.post('/login', (req, res) => {
     return res.status(400).json({ error: 'Cuenta suspendida' });
   }
 
+  const rustdeskId = id ? String(id).trim() : null;
+  const machineId = normalizeMachineId(deviceInfo?.machine_id);
+
   // Auto-asociacion: el propio login ya manda el ID del equipo desde el que
   // se loguean (protocolo estandar, sin parche). Si el equipo no tiene dueno
   // todavia, se reclama solo para esta cuenta -- asi el cliente no tiene que
   // ir al panel web a "reclamar" nada a mano. Si ya no quedan cupos del plan,
   // se rechaza el login (sin emitir token) con un mensaje explicito.
-  if (id) {
-    const rustdeskId = String(id).trim();
-    const machineId = normalizeMachineId(deviceInfo?.machine_id);
+  if (rustdeskId) {
     const owner = deviceClaim.getDeviceOwner(rustdeskId);
     if (owner && owner.owner_user_id !== user.id) {
       return res.status(403).json({ error: 'Este equipo ya esta asociado a otra cuenta. Contacta al administrador.' });
@@ -174,7 +180,10 @@ router.post('/login', (req, res) => {
     saveLoginDeviceInfo({ id: rustdeskId, uuid, deviceInfo, user, machineId });
   }
 
-  const token = issueToken(user);
+  const token = nativeSessions.issueNativeSession(user, {
+    rustdeskId,
+    machineId,
+  });
   res.json({
     access_token: token,
     type: 'access_token',
@@ -185,14 +194,38 @@ router.post('/login', (req, res) => {
 });
 
 router.post('/logout', requireBearerAuth, (req, res) => {
-  // Libera el cupo automaticamente: el mismo equipo se puede volver a
-  // reclamar despues (por este usuario o, si ya no le pertenece a nadie,
-  // por otro), y otro equipo puede ocupar el cupo que quedo libre.
+  // Revoca primero la credencial utilizada en esta solicitud. Los clientes
+  // antiguos que aun tengan JWT continuan hasta su vencimiento natural.
+  nativeSessions.revokeNativeSessionToken(req.authToken);
+  closeNativeSessionConnections(req.user.session_id);
+
+  // Libera el cupo y revoca las demas sesiones asociadas al dispositivo.
   const { id } = req.body || {};
   if (id) {
-    const released = deviceClaim.releaseDevice(req.user.sub, id);
-    if (released) notifications.logActivity(null, 'device_released_on_logout', 'user', req.user.sub, id);
+    const rustdeskId = String(id).trim();
+
+    nativeSessions.revokeDeviceNativeSessions(
+      req.user.sub,
+      rustdeskId
+    );
+    closeDeviceConnections(req.user.sub, rustdeskId);
+
+    const released = deviceClaim.releaseDevice(
+      req.user.sub,
+      rustdeskId
+    );
+
+    if (released) {
+      notifications.logActivity(
+        null,
+        'device_released_on_logout',
+        'user',
+        req.user.sub,
+        rustdeskId
+      );
+    }
   }
+
   res.json({});
 });
 
