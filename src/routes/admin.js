@@ -13,6 +13,7 @@ const { pushToAll } = require('../ws');
 const clientDownload = require('../clientDownload');
 const screenCamPolicy = require('../screenCamPolicy');
 const screenCamPreview = require('../screenCamPreview');
+const mediaMtxApi = require('../mediaMtxApi');
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -26,6 +27,7 @@ router.put('/settings', (req, res) => {
   const {
     business_name, tax_id, address, phone, whatsapp_number, contact_email, default_currency, language,
     expiry_warning_days: expiryWarningDays,
+    screen_cam_preview_duration_seconds: previewDurationSeconds,
   } = req.body || {};
   const current = db.prepare('select * from platform_settings where id = 1').get();
 
@@ -37,10 +39,24 @@ router.put('/settings', (req, res) => {
     expiryWarningDaysJson = JSON.stringify([...new Set(expiryWarningDays)].sort((a, b) => b - a));
   }
 
+  // Duracion de las sesiones de previsualizacion de ScreenCam: solo aplica a
+  // sesiones NUEVAS (ver src/screenCamPreview.js resolvePreviewDurationSeconds).
+  // Las ya creadas conservan su expires_at original.
+  let previewDuration = current.screen_cam_preview_duration_seconds;
+  if (previewDurationSeconds !== undefined) {
+    if (!screenCamPreview.isValidPreviewDurationSeconds(previewDurationSeconds)) {
+      return res.status(400).json({
+        error: `screen_cam_preview_duration_seconds debe ser un entero entre ${screenCamPreview.PREVIEW_DURATION_MIN_SECONDS} y ${screenCamPreview.PREVIEW_DURATION_MAX_SECONDS}`,
+      });
+    }
+    previewDuration = previewDurationSeconds;
+  }
+
   db.prepare(`
     update platform_settings set
       business_name = ?, tax_id = ?, address = ?, phone = ?, whatsapp_number = ?, contact_email = ?,
-      default_currency = ?, language = ?, expiry_warning_days = ?, updated_at = datetime('now')
+      default_currency = ?, language = ?, expiry_warning_days = ?,
+      screen_cam_preview_duration_seconds = ?, updated_at = datetime('now')
     where id = 1
   `).run(
     business_name ?? current.business_name,
@@ -52,8 +68,20 @@ router.put('/settings', (req, res) => {
     default_currency || current.default_currency,
     language || current.language,
     expiryWarningDaysJson,
+    previewDuration,
   );
   notifications.logActivity(req.user.sub, 'settings_updated', 'platform_settings', 1, business_name || null);
+  if (previewDurationSeconds !== undefined && previewDuration !== current.screen_cam_preview_duration_seconds) {
+    // Auditoria especifica del limite (recomendado: quien cambio que valor).
+    // Sin datos sensibles: solo los dos enteros involucrados.
+    notifications.logActivity(
+      req.user.sub,
+      'screen_cam_preview_duration_updated',
+      'platform_settings',
+      1,
+      JSON.stringify({ from: current.screen_cam_preview_duration_seconds, to: previewDuration }),
+    );
+  }
   res.json(db.prepare('select * from platform_settings where id = 1').get());
 });
 
@@ -462,10 +490,6 @@ router.delete('/devices/:rustdeskId/screen-cam/rtsp-credentials', (req, res) => 
 });
 
 // ---------- ScreenCam: seleccion remota de pantalla ----------
-function screenCamErrorStatus(code) {
-  return { NOT_FOUND: 404, FORBIDDEN: 403, NOT_ACTIVE: 409, ALREADY_ACTIVE: 409, MEDIA_NOT_CONFIGURED: 503 }[code] || 400;
-}
-
 router.get('/devices/:rustdeskId/screen-cam/displays', (req, res) => {
   const rustdeskId = String(req.params.rustdeskId);
   const device = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
@@ -492,39 +516,180 @@ router.put('/devices/:rustdeskId/screen-cam/display', (req, res) => {
 });
 
 // ---------- ScreenCam: previsualizacion de video ----------
-router.post('/devices/:rustdeskId/screen-cam/preview', (req, res) => {
+const SCREEN_CAM_PREVIEW_START_ERRORS = Object.freeze({
+  NOT_FOUND: Object.freeze({ status: 404, message: 'Equipo no encontrado' }),
+  FORBIDDEN: Object.freeze({
+    status: 403,
+    message: 'No tienes permiso para abrir una previsualizacion',
+  }),
+  NOT_ACTIVE: Object.freeze({
+    status: 409,
+    message: 'ScreenCam no esta activo en este equipo',
+  }),
+  ALREADY_ACTIVE: Object.freeze({
+    status: 409,
+    message: 'Ya hay una previsualizacion abierta para este equipo',
+  }),
+  MEDIA_NOT_CONFIGURED: Object.freeze({
+    status: 503,
+    message: 'El gateway multimedia no esta configurado en este servidor',
+  }),
+});
+
+function screenCamPreviewStartError(error) {
   try {
-    screenCamPolicy.assertPermission('screen_cam.open_preview', {
-      role: req.user.role, userId: req.user.sub, rustdeskId: String(req.params.rustdeskId),
-    });
-    res.status(201).json(screenCamPreview.startPreview(String(req.params.rustdeskId), req.user.sub));
+    if (typeof error?.code !== 'string') return null;
+    return Object.hasOwn(SCREEN_CAM_PREVIEW_START_ERRORS, error.code)
+      ? SCREEN_CAM_PREVIEW_START_ERRORS[error.code]
+      : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function safeScreenCamPreviewStartLog(logger) {
+  try {
+    const result = logger(
+      '[screencam] operation=screen-cam-preview-start code=internal_error',
+    );
+    if (result && typeof result.catch === 'function') result.catch(() => {});
+  } catch (_) {
+    // La respuesta HTTP no depende de la disponibilidad del logger.
+  }
+}
+
+function createScreenCamPreviewStartHandler(options = {}) {
+  const assertPermission = typeof options.assertPermission === 'function'
+    ? options.assertPermission
+    : (...args) => screenCamPolicy.assertPermission(...args);
+  const startPreview = typeof options.startPreview === 'function'
+    ? options.startPreview
+    : (...args) => screenCamPreview.startPreview(...args);
+  const logger = typeof options.logger === 'function'
+    ? options.logger
+    : (message) => console.warn(message);
+
+  return (req, res) => {
+    try {
+      const rustdeskId = String(req.params.rustdeskId);
+      assertPermission('screen_cam.open_preview', {
+        role: req.user.role,
+        userId: req.user.sub,
+        rustdeskId,
+      });
+      return res.status(201).json(startPreview(rustdeskId, req.user.sub));
+    } catch (error) {
+      const knownError = screenCamPreviewStartError(error);
+      if (knownError) {
+        return res.status(knownError.status).json({ error: knownError.message });
+      }
+      safeScreenCamPreviewStartLog(logger);
+      return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  };
+}
+
+router.post(
+  '/devices/:rustdeskId/screen-cam/preview',
+  createScreenCamPreviewStartHandler(),
+);
+
+// Enriquecimiento de disponibilidad (Tarea 2): ademas del status persistido
+// en SQLite, se consulta a MediaMTX (solo desde el backend, nunca desde el
+// navegador) si el path YA tiene un publisher con pista de video. Es una
+// optimizacion para que el panel no dispare WHEP antes de tiempo -- el
+// reintento de WHEP sigue siendo la red de seguridad real si esto falla o
+// no esta disponible, por eso null/error se tratan como "seguir adelante".
+function createScreenCamPreviewGetHandler(options = {}) {
+  const getPreviewForDevice = typeof options.getPreviewForDevice === 'function'
+    ? options.getPreviewForDevice
+    : (...args) => screenCamPreview.getPreviewForDevice(...args);
+  const isPathPublisherReady = typeof options.isPathPublisherReady === 'function'
+    ? options.isPathPublisherReady
+    : (...args) => mediaMtxApi.isPathPublisherReady(...args);
+  const logger = typeof options.logger === 'function'
+    ? options.logger
+    : (message) => console.warn(message);
+
+  return async (req, res) => {
+    try {
+      const sessionId = String(req.params.sessionId);
+      const rustdeskId = String(req.params.rustdeskId);
+      const session = getPreviewForDevice(sessionId, rustdeskId);
+      if (!session) return res.status(404).json({ error: 'Sesion no encontrada' });
+
+      if (session.status === 'ready' && session.playback_url) {
+        let ready = null;
+        try {
+          ({ ready } = await isPathPublisherReady(sessionId, options.mediaApiOptions));
+        } catch (_) {
+          ready = null;
+        }
+        // false === MediaMTX confirma que todavia no hay publisher; cualquier
+        // otro resultado (true o desconocido) deja avanzar al panel.
+        session.playback_ready = ready !== false;
+      } else {
+        session.playback_ready = false;
+      }
+      return res.json(session);
+    } catch (err) {
+      try {
+        logger('[screencam] operation=screen-cam-preview-get code=internal_error');
+      } catch (_) { /* la respuesta HTTP no depende del logger */ }
+      return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  };
+}
+
+router.get(
+  '/devices/:rustdeskId/screen-cam/preview/:sessionId',
+  createScreenCamPreviewGetHandler(),
+);
+
+router.delete('/devices/:rustdeskId/screen-cam/preview/:sessionId', async (req, res) => {
+  try {
+    res.json(await screenCamPreview.stopPreview(
+      String(req.params.sessionId),
+      req.user.sub,
+      { expectedRustdeskId: String(req.params.rustdeskId) },
+    ));
   } catch (e) {
-    res.status(screenCamErrorStatus(e.code)).json({ error: e.message });
+    if (e?.code === 'NOT_FOUND') {
+      return res.status(404).json({ error: 'Sesion no encontrada' });
+    }
+    return res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
-router.get('/devices/:rustdeskId/screen-cam/preview/:sessionId', (req, res) => {
-  const session = screenCamPreview.statusOf(String(req.params.sessionId));
-  if (!session) return res.status(404).json({ error: 'Sesion no encontrada' });
-  res.json(session);
-});
+function beaconStopSessionRef(sessionId) {
+  const prefix = String(sessionId).slice(0, 8).replace(/[^A-Za-z0-9_-]/g, '_');
+  return prefix || 'invalid';
+}
 
-router.delete('/devices/:rustdeskId/screen-cam/preview/:sessionId', (req, res) => {
-  try {
-    res.json(screenCamPreview.stopPreview(String(req.params.sessionId), req.user.sub));
-  } catch (e) {
-    res.status(screenCamErrorStatus(e.code)).json({ error: e.message });
-  }
-});
+function beaconStopErrorCode(error) {
+  const code = typeof error?.code === 'string' ? error.code.slice(0, 40) : '';
+  return /^[A-Za-z0-9_-]+$/.test(code) ? code : 'UNEXPECTED';
+}
 
 // navigator.sendBeacon solo puede hacer POST, asi que el cierre al abandonar
 // la pagina necesita su propia ruta. Sin esto, cerrar la pestana dejaria al
 // equipo publicando video hasta que la sesion expire sola.
-router.post('/devices/:rustdeskId/screen-cam/preview/:sessionId/beacon-stop', (req, res) => {
+router.post('/devices/:rustdeskId/screen-cam/preview/:sessionId/beacon-stop', async (req, res) => {
   try {
-    screenCamPreview.stopPreview(String(req.params.sessionId), req.user.sub);
-  } catch (_) {
-    // La sesion pudo haber expirado ya; no hay nada que informar al beacon.
+    await screenCamPreview.stopPreview(
+      String(req.params.sessionId),
+      req.user.sub,
+      { expectedRustdeskId: String(req.params.rustdeskId) },
+    );
+  } catch (e) {
+    // NOT_FOUND es normal e indistinguible para el beacon. Los fallos
+    // inesperados solo registran operacion, codigo acotado y prefijo sanitario.
+    if (e?.code !== 'NOT_FOUND') {
+      console.warn(
+        `[screencam] operation=beacon-stop session=${beaconStopSessionRef(req.params.sessionId)}`
+        + ` code=${beaconStopErrorCode(e)}`,
+      );
+    }
   }
   res.status(204).end();
 });
@@ -724,3 +889,6 @@ router.get('/activity', (req, res) => {
 });
 
 module.exports = router;
+module.exports.createScreenCamPreviewStartHandler = createScreenCamPreviewStartHandler;
+module.exports.createScreenCamPreviewGetHandler = createScreenCamPreviewGetHandler;
+module.exports.screenCamPreviewStartError = screenCamPreviewStartError;

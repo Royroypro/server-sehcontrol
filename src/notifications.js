@@ -150,11 +150,58 @@ async function generateExpiryAlerts() {
   return created;
 }
 
-function startAlertScheduler(intervalMs = 60 * 60 * 1000) {
-  generateExpiryAlerts().catch((e) => console.error('[notifications] error generando alertas:', e));
-  setInterval(() => {
-    generateExpiryAlerts().catch((e) => console.error('[notifications] error generando alertas:', e));
-  }, intervalMs);
+function startAlertScheduler(intervalMs = 60 * 60 * 1000, options = {}) {
+  if (!options || typeof options !== 'object') options = {};
+  const generateAlerts = typeof options.generateExpiryAlerts === 'function'
+    ? options.generateExpiryAlerts : generateExpiryAlerts;
+  const setIntervalImpl = typeof options.setInterval === 'function'
+    ? options.setInterval : setInterval;
+  const clearIntervalImpl = typeof options.clearInterval === 'function'
+    ? options.clearInterval : clearInterval;
+  const logger = typeof options.logger === 'function'
+    ? options.logger : (message) => console.error(message);
+  let stopped = false;
+  let intervalCleared = false;
+
+  const logCycleFailure = () => {
+    try {
+      const result = logger('[notifications] operation=expiry-alert-scheduler code=cycle_failed');
+      if (result && typeof result.catch === 'function') result.catch(() => {});
+    } catch (_) {
+      // La generacion de alertas no depende del logger.
+    }
+  };
+  const runProtectedGeneration = () => {
+    if (stopped) return;
+    try {
+      const result = generateAlerts();
+      if (result && typeof result.catch === 'function') result.catch(logCycleFailure);
+    } catch (_) {
+      logCycleFailure();
+    }
+  };
+
+  runProtectedGeneration();
+  const interval = setIntervalImpl(runProtectedGeneration, intervalMs);
+  try {
+    if (interval && typeof interval.unref === 'function') interval.unref();
+  } catch (_) {
+    // unref es una optimizacion de lifecycle, no una condicion funcional.
+  }
+
+  return Object.freeze({
+    stop() {
+      if (intervalCleared) return false;
+      stopped = true;
+      intervalCleared = true;
+      try {
+        clearIntervalImpl(interval);
+      } catch (_) {
+        // El flag impide nuevas ejecuciones aunque el timer inyectado falle.
+      }
+      return true;
+    },
+  });
 }
 
 function logActivity(actorUserId, action, targetType, targetId, detail) {

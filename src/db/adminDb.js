@@ -166,6 +166,13 @@ addColumnIfMissing('platform_settings', 'whatsapp_number', 'varchar(50)');
 // (expiry_warning). JSON array de enteros, ej. '[10,7,5,3,1]'. Configurable
 // desde el panel (Configuracion) -- ver src/notifications.js generateExpiryAlerts.
 addColumnIfMissing('platform_settings', 'expiry_warning_days', "text not null default '[10,7,5,3,1]'");
+// Duracion maxima de una sesion de previsualizacion de ScreenCam, en
+// segundos. El default (300 = 5 minutos) es el mismo limite que ya regia
+// hardcodeado en src/screenCamPreview.js -- este cambio no altera el
+// comportamiento de ninguna instalacion existente hasta que un admin lo
+// edite explicitamente desde Configuracion. Limites en
+// src/screenCamPreview.js (PREVIEW_DURATION_MIN_SECONDS/MAX_SECONDS).
+addColumnIfMissing('platform_settings', 'screen_cam_preview_duration_seconds', 'integer not null default 300');
 // Tags de la libreta de direcciones "legacy" (categorias "Cabinas"/"Clientes"
 // que pide el cliente). JSON array de strings, ej. '["Cabinas"]'.
 addColumnIfMissing('devices', 'tags', "text not null default '[]'");
@@ -321,8 +328,9 @@ addColumnIfMissing('device_screen_cam_settings', 'displays_updated_at', 'datetim
 
 // Sesiones temporales de previsualizacion de video (WebRTC). No se guarda
 // video ni fragmentos: esta tabla solo registra quien pidio ver que equipo,
-// cuando, y el token de publicacion de un solo uso (que expira). Sirve
-// ademas como registro de auditoria de quien abrio una vista en vivo.
+// cuando, y el token temporal de publicacion (reutilizable mientras la sesion
+// siga viva). stopped, failed y expired impiden nuevos handshakes. Sirve ademas
+// como registro de auditoria de quien abrio una vista en vivo.
 db.exec(`
   create table if not exists screen_cam_preview_sessions (
     id varchar(40) primary key,
