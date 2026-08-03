@@ -544,6 +544,80 @@ function renderDisplayControls(d, ownerId) {
   `;
 }
 
+// Un cambio de pantalla no es inmediato: el equipo tiene que reconstruir el
+// capturador y el encoder, y recien despues informa la pantalla activa nueva.
+// Hasta entonces `change_pending` es true y se muestra "Aplicando cambio…".
+//
+// El panel no tiene WebSocket, y `changeScreenCamDisplay` refrescaba una sola
+// vez, justo cuando el cambio no podia estar aplicado todavia. El cartel
+// quedaba congelado hasta que el admin recargaba a mano, aunque el equipo ya
+// hubiera cambiado de pantalla hace rato. De ahi este sondeo acotado.
+//
+// Se consulta la API y solo se vuelve a dibujar cuando el estado cambia de
+// verdad, en vez de re-renderizar cada dos segundos: redibujar destruye el
+// <select> y perderia la interaccion si el admin lo esta usando.
+const DISPLAY_CHANGE_POLL_MS = 2000;
+// Margen para el peor caso razonable: la reconfiguracion espera al encoder por
+// hardware, que puede tardar decenas de segundos en aparecer tras un cambio de
+// topologia. Vencido el plazo se deja de sondear y se dibuja lo ultimo que se
+// sepa -- el cartel sigue siendo correcto si el equipo de verdad no respondio.
+const DISPLAY_CHANGE_TIMEOUT_MS = 90000;
+const DISPLAY_CHANGE_POLLERS = {};
+
+function stopDisplayChangePolling(ownerId) {
+  const entry = DISPLAY_CHANGE_POLLERS[ownerId];
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  delete DISPLAY_CHANGE_POLLERS[ownerId];
+}
+
+function startDisplayChangePolling(ownerId, rustdeskId) {
+  // Un cambio nuevo reemplaza al anterior: nunca dos sondeos para la misma
+  // cuenta compitiendo por redibujar la misma fila.
+  stopDisplayChangePolling(ownerId);
+
+  const entry = { timer: null, deadline: Date.now() + DISPLAY_CHANGE_TIMEOUT_MS };
+  DISPLAY_CHANGE_POLLERS[ownerId] = entry;
+
+  const finish = () => {
+    if (DISPLAY_CHANGE_POLLERS[ownerId] !== entry) return;
+    stopDisplayChangePolling(ownerId);
+    loadAccountScreenCam(ownerId);
+  };
+
+  const tick = async () => {
+    if (DISPLAY_CHANGE_POLLERS[ownerId] !== entry) return;
+    // El acordeon de la cuenta se cerro o la vista cambio: no hay nada que
+    // actualizar y seguir sondeando solo gastaria peticiones.
+    if (!document.getElementById(`devicesBody-${ownerId}`)) {
+      stopDisplayChangePolling(ownerId);
+      return;
+    }
+    if (Date.now() >= entry.deadline) {
+      finish();
+      return;
+    }
+    try {
+      const data = await api(`/api/admin/users/${ownerId}/screen-cam`);
+      if (DISPLAY_CHANGE_POLLERS[ownerId] !== entry) return;
+      const device = data.devices.find((d) => d.rustdesk_id === rustdeskId);
+      // Si el equipo ya no figura, o ya no informa pantallas, no hay cambio
+      // pendiente que esperar.
+      if (!device || !device.displays || !device.displays.change_pending) {
+        finish();
+        return;
+      }
+    } catch (_) {
+      // Un fallo puntual de red no cancela el sondeo: se reintenta hasta que
+      // venza el plazo.
+    }
+    if (DISPLAY_CHANGE_POLLERS[ownerId] !== entry) return;
+    entry.timer = setTimeout(tick, DISPLAY_CHANGE_POLL_MS);
+  };
+
+  entry.timer = setTimeout(tick, DISPLAY_CHANGE_POLL_MS);
+}
+
 async function changeScreenCamDisplay(rustdeskId, ownerId, select) {
   const displayId = decodeURIComponent(select.value);
   const displayName = select.options[select.selectedIndex].text.split(' — ')[0];
@@ -554,6 +628,7 @@ async function changeScreenCamDisplay(rustdeskId, ownerId, select) {
       body: { display_id: displayId, display_name: displayName },
     });
     loadAccountScreenCam(ownerId);
+    startDisplayChangePolling(ownerId, rustdeskId);
   } catch (e) {
     alert(e.message);
     select.disabled = false;
