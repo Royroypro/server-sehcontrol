@@ -1,9 +1,9 @@
-Sehcontrol production build 2026.07.23.1
+Sehcontrol production build 2026.07.30.1
 Platform: linux/amd64
 
-Image: sehcontrol-panel:2026.07.23.1-amd64
-Docker image ID: sha256:bd0f218fec1da5046e058d8cd0e790eae7e2fed71a9cda202befbbec57b9f9cc
-Uncompressed size: 100889646 bytes
+Image: sehcontrol-panel:2026.07.30.1-amd64
+Docker image ID: sha256:d38d62b833b0a41ff7e42cfece37fd464d45b786e54d8a8e826949b253bc9890
+Uncompressed size: 100984301 bytes
 
 Image: sehcontrol-rustdesk-server:1.1.16-membership-amd64
 Docker image ID: sha256:5989daf72f4c0883927f47f4f9ec4463d19ec84d8726d31d2ab9391574981ed2

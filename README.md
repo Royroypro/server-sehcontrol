@@ -1,92 +1,101 @@
-# Sehcontrol
+# Despliegue de produccion
 
-Despliegue unificado del panel de administracion Sehcontrol y RustDesk Server
-OSS. Incluye:
+Destino preparado:
 
-- `panel`: usuarios, membresias, pagos, equipos, alertas y API RustDesk.
-- `hbbs`: registro de IDs, rendezvous y senalizacion.
-- `hbbr`: relay para conexiones que no pueden ser directas.
-- `mysql`: servicio opcional preparado para una migracion futura del panel.
+- Ubuntu 20.04.6 LTS, `amd64`.
+- `sehcontrol.sehuacho.com`.
+- Nginx y HTTPS en `443`.
+- Panel enlazado solo a `127.0.0.1:8899`.
+- RustDesk ID y relay en `sehcontrol.sehuacho.com:21117`.
 
-`hbbs` se compila desde el commit fijado en `RUSTDESK_SERVER_COMMIT` y aplica
-`patches/rustdesk-membership.patch`. Ese parche hace cumplir los bloqueos que
-el panel escribe en `peer.status`; no debe sustituirse por la imagen OSS
-oficial sin portar primero el parche.
+## 1. Instalar el paquete
 
-## Desplegar
-
-1. Crea la configuracion y cambia las contrasenas:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Define `RUSTDESK_RELAY_HOST` con el dominio o IP publica del servidor.
-
-3. Inicia todo:
-
-   ```bash
-   mkdir -p data rustdesk-data
-   docker compose up -d --build
-   ```
-
-4. Comprueba los servicios:
-
-   ```bash
-   docker compose ps
-   docker compose logs -f panel hbbs hbbr
-   ```
-
-El panel queda en `http://<servidor>:8899/admin/`. Los clientes RustDesk usan
-el valor de `RUSTDESK_RELAY_HOST` como servidor ID/relay y la clave publica
-generada en `rustdesk-data/id_ed25519.pub`.
-
-El despliegue usa red host, recomendada por la documentacion oficial de
-RustDesk para Linux. Deben estar permitidos:
-
-- TCP `21115`, `21116`, `21117`, `21118` y `21119`.
-- UDP `21116`.
-- TCP `8899` para el panel.
-
-Para evitar que un cliente transfiriendo archivos pesados sature el enlace
-en perjuicio de los demas, ver
-[`docs/BANDWIDTH_LIMIT.md`](docs/BANDWIDTH_LIMIT.md).
-
-## Importar una instalacion existente
-
-Deten primero los procesos o contenedores antiguos de `hbbs` y `hbbr` para que
-SQLite consolide su WAL. Luego importa la base y las claves:
+Descarga y descomprime el paquete de la version en:
 
 ```bash
-./scripts/import-rustdesk-data.sh /ruta/al/directorio/rustdesk
-docker compose up -d --build
+mkdir -p /home/ubuntu/server-sehcontrol
+cd /home/ubuntu/server-sehcontrol
+tar -xzf sehcontrol-production-2026.07.25.6-amd64.tar.gz
 ```
 
-En este servidor, la instalacion binaria detectada esta en:
+El paquete no contiene contrasenas ni claves privadas.
+
+## 2. Configurar secretos
 
 ```bash
-./scripts/import-rustdesk-data.sh /home/server3/rustdesk-server-bin/run
+cp .env.example .env
+chmod 600 .env
+openssl rand -hex 48
+nano .env
 ```
 
-Conservar `id_ed25519` evita que todos los clientes tengan que cambiar la clave
-del servidor.
+Coloca el resultado aleatorio en `JWT_SECRET` y define
+`DEFAULT_ADMIN_PASSWORD`. El correo ya queda configurado como
+`admin@sehuacho.com`. La contrasena solo se usa al crear la base por primera
+vez; cambiar el archivo despues no modifica un administrador existente.
 
-## Persistencia y actualizaciones
-
-`data/` contiene la base del panel. `rustdesk-data/` contiene la base y las
-claves de RustDesk. Ambos directorios estan excluidos de Git.
+## 3. Instalar la clave RustDesk existente
 
 ```bash
-git pull
-docker compose up -d --build
+mkdir -p data rustdesk-data public/client
+chmod 700 rustdesk-data
+nano rustdesk-data/id_ed25519
+nano rustdesk-data/id_ed25519.pub
+chmod 600 rustdesk-data/id_ed25519
+chmod 644 rustdesk-data/id_ed25519.pub
 ```
 
-La preparacion para MySQL esta explicada en
-`docs/MYSQL_MIGRATION.md`. MySQL no se inicia ni se usa por defecto.
+La clave publica esperada es:
 
-## Produccion
+```text
+20WVH2iU16txMRGam1ciZqhVfzfAJlFzNhgSdAFHWwk=
+```
 
-`production/README.md` cubre el despliegue del paquete ya compilado en
-`sehcontrol.sehuacho.com`. Para generar ese paquete a partir del codigo
-fuente (compilar las imagenes, empaquetarlas y firmarlas), ver
-[`docs/BUILD_PRODUCTION.md`](docs/BUILD_PRODUCTION.md).
+No copies la clave privada al repositorio ni al paquete. Debe escribirse
+directamente en el servidor y corresponder a esa clave publica.
+
+## 4. Cargar imagenes precompiladas
+
+```bash
+chmod +x load-images.sh
+./load-images.sh
+```
+
+El script verifica primero `SHA256SUMS` y luego importa las dos imagenes
+Docker. No compila nada.
+
+## 5. Iniciar Sehcontrol
+
+```bash
+docker compose -f compose.yaml config
+docker compose -f compose.yaml up -d
+docker compose -f compose.yaml ps
+curl --fail http://127.0.0.1:8899/health
+```
+
+El puerto `8899` debe permanecer bloqueado en UFW. Los puertos RustDesk
+permitidos son TCP `21115`, `21116`, `21117`, `21118`, `21119` y UDP `21116`.
+
+## 6. Activar Nginx
+
+```bash
+sudo cp nginx-sehcontrol.conf /etc/nginx/sites-available/sehcontrol
+sudo ln -s /etc/nginx/sites-available/sehcontrol /etc/nginx/sites-enabled/sehcontrol
+sudo nginx -t
+sudo systemctl reload nginx
+curl --fail https://sehcontrol.sehuacho.com/health
+```
+
+Si el enlace ya existe, no vuelvas a crearlo. La configuracion utiliza el
+certificado existente de Let's Encrypt.
+
+## 7. Comprobacion final
+
+```bash
+docker compose -f compose.yaml logs --tail=100 panel hbbs hbbr
+ss -lntup | grep -E '8899|2111[5-9]'
+```
+
+Abre `https://sehcontrol.sehuacho.com/admin/`, inicia sesion y cambia la
+contrasena inicial. Confirma en Configuracion que la clave publica mostrada
+coincide con la indicada arriba.

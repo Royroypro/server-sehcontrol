@@ -20,7 +20,7 @@ services:
       - ./rustdesk-data:/root
 
   panel:
-    image: sehcontrol-panel:2026.07.25-local
+    image: sehcontrol-panel:2026.08.01.1-screencam-amd64
     container_name: sehcontrol-panel
     user: "0:0"
     command: ["sh", "-c", "npm run seed && exec npm start"]
@@ -48,3 +48,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # Gateway multimedia para la previsualizacion de ScreenCam. Componente
+  # separado del panel a proposito (aunque viva en la misma maquina): recibe
+  # la publicacion SRT saliente del cliente y la entrega al navegador por
+  # WebRTC. No graba. Ver production/mediamtx.yml.
+  mediamtx:
+    image: bluenviron/mediamtx:1.18.2
+    container_name: sehcontrol-mediamtx
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - panel
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
