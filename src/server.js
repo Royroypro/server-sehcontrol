@@ -55,6 +55,10 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+app.get('/eula', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'eula.html'));
+});
+
 app.get('/ayuda', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'ayuda.html'));
 });
