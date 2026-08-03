@@ -17,6 +17,43 @@ function clientDownloadHandler(platform) {
   };
 }
 
+// La app corre detras de nginx y sin `trust proxy`, asi que `req.protocol` dice
+// siempre "http" aunque el cliente haya llegado por HTTPS. Publicar esa URL
+// haria que cada descarga empiece por un 301, o peor, por texto plano si algun
+// dia el redirect no estuviera. Se usa X-Forwarded-Proto, que este nginx
+// siempre fija (ver nginx-sehcontrol.conf), validado contra los dos unicos
+// valores aceptables para no confiar en un encabezado arbitrario.
+function publicOrigin(req) {
+  const forwarded = String(req.get('x-forwarded-proto') || '').split(',')[0].trim();
+  const scheme = forwarded === 'https' || forwarded === 'http' ? forwarded : req.protocol;
+  return `${scheme}://${req.get('host')}`;
+}
+
+// Lo que consulta el cliente instalado para saber si hay una version nueva.
+//
+// Publico y sin autenticacion a proposito: un equipo que todavia no inicio
+// sesion igual debe poder actualizarse, y la respuesta no expone nada que no
+// este ya en la pagina de descarga. Devuelve 200 con version vacia -- en vez
+// de 404 -- cuando no hay nada declarado, para que el cliente distinguga
+// "no hay actualizacion" de "no pude preguntar" sin tratar un error de red
+// como si fuera una respuesta.
+router.get('/client-version/:platform', (req, res) => {
+  const { platform } = req.params;
+  if (!clientDownload.PLATFORMS[platform]) {
+    return res.status(404).json({ error: 'Plataforma desconocida' });
+  }
+  const info = clientDownload.getClientInfo(platform);
+  const announce = info.available && !!info.version;
+  res.set('Cache-Control', 'no-store').json({
+    version: announce ? info.version : '',
+    // Absoluta: el cliente la usa tal cual, sin componer nombres de archivo.
+    // Componerlos fue justamente lo que ato el flujo original al esquema de
+    // URLs de GitHub.
+    url: announce ? `${publicOrigin(req)}${info.download_url}` : '',
+    notes: announce ? (info.notes || '') : '',
+  });
+});
+
 router.get('/client-download/windows', clientDownloadHandler('windows'));
 router.get('/client-download/android', clientDownloadHandler('android'));
 // Alias retrocompatible con el enlace original, de antes de soportar Android.

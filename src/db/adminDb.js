@@ -173,6 +173,16 @@ addColumnIfMissing('platform_settings', 'expiry_warning_days', "text not null de
 // edite explicitamente desde Configuracion. Limites en
 // src/screenCamPreview.js (PREVIEW_DURATION_MIN_SECONDS/MAX_SECONDS).
 addColumnIfMissing('platform_settings', 'screen_cam_preview_duration_seconds', 'integer not null default 300');
+// Version publicada de cada cliente descargable, y las notas que el cliente
+// muestra al ofrecer la actualizacion. La declara el admin al subir el
+// binario: el archivo se guarda con nombre fijo (sehcontrol.exe/.apk) y no
+// lleva la version adentro de forma legible, asi que extraerla del binario
+// seria adivinar. Vacio = no se anuncia ninguna actualizacion, que es el
+// estado de cualquier instalacion existente hasta que un admin la declare.
+addColumnIfMissing('platform_settings', 'client_version_windows', 'text');
+addColumnIfMissing('platform_settings', 'client_notes_windows', 'text');
+addColumnIfMissing('platform_settings', 'client_version_android', 'text');
+addColumnIfMissing('platform_settings', 'client_notes_android', 'text');
 // Tags de la libreta de direcciones "legacy" (categorias "Cabinas"/"Clientes"
 // que pide el cliente). JSON array de strings, ej. '["Cabinas"]'.
 addColumnIfMissing('devices', 'tags', "text not null default '[]'");

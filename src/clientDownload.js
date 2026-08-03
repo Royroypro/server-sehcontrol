@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const db = require('./db/adminDb');
 
 const dataDir = path.resolve(process.env.ADMIN_DATA_PATH || './data');
 const downloadDir = path.join(dataDir, 'downloads');
@@ -21,10 +22,38 @@ function platformPath(platform) {
   return path.join(downloadDir, PLATFORMS[platform].filename);
 }
 
+// Solo digitos y puntos: es lo que el cliente compara numericamente
+// (get_version_number en src/common.rs del cliente). Una version con sufijos
+// no se puede ordenar de forma confiable contra la que corre en el equipo, asi
+// que se rechaza al declararla en vez de anunciarse y no aplicarse nunca.
+const VERSION_PATTERN = /^\d+(\.\d+){1,3}$/;
+const MAX_NOTES_LENGTH = 2000;
+
+function isValidClientVersion(version) {
+  return typeof version === 'string' && VERSION_PATTERN.test(version.trim());
+}
+
+function readRelease(platform) {
+  try {
+    const row = db.prepare(
+      `select client_version_${platform} as version, client_notes_${platform} as notes
+       from platform_settings where id = 1`,
+    ).get();
+    const version = row && typeof row.version === 'string' ? row.version.trim() : '';
+    const notes = row && typeof row.notes === 'string' ? row.notes : '';
+    return { version: isValidClientVersion(version) ? version : '', notes };
+  } catch (_) {
+    // Migracion no corrida todavia: se comporta como "sin version declarada",
+    // que es exactamente no anunciar ninguna actualizacion.
+    return { version: '', notes: '' };
+  }
+}
+
 function getClientInfo(platform) {
   const config = PLATFORMS[platform];
   const clientPath = platformPath(platform);
-  if (!fs.existsSync(clientPath)) return { available: false };
+  const release = readRelease(platform);
+  if (!fs.existsSync(clientPath)) return { available: false, version: release.version };
   const stat = fs.statSync(clientPath);
   return {
     available: true,
@@ -32,7 +61,28 @@ function getClientInfo(platform) {
     size_bytes: stat.size,
     updated_at: stat.mtime.toISOString(),
     download_url: `/api/public/client-download/${platform}`,
+    version: release.version,
+    notes: release.notes,
   };
+}
+
+// La version se declara por separado del binario a proposito: subir el archivo
+// y anunciarlo son dos decisiones distintas, y esto permite corregir una
+// version mal escrita sin volver a subir 100 MB.
+function setClientRelease(platform, version, notes) {
+  if (!PLATFORMS[platform]) throw new Error('Plataforma desconocida');
+  const trimmed = typeof version === 'string' ? version.trim() : '';
+  // Vacio es valido y significa "dejar de anunciar".
+  if (trimmed !== '' && !isValidClientVersion(trimmed)) {
+    throw new Error('La version debe ser numerica, por ejemplo 1.4.9');
+  }
+  const safeNotes = typeof notes === 'string' ? notes.slice(0, MAX_NOTES_LENGTH) : '';
+  db.prepare(
+    `update platform_settings
+     set client_version_${platform} = ?, client_notes_${platform} = ?
+     where id = 1`,
+  ).run(trimmed, safeNotes);
+  return getClientInfo(platform);
 }
 
 function getAllClientInfo() {
@@ -54,4 +104,12 @@ function saveClient(platform, buffer) {
   return getClientInfo(platform);
 }
 
-module.exports = { PLATFORMS, platformPath, getClientInfo, getAllClientInfo, saveClient };
+module.exports = {
+  PLATFORMS,
+  platformPath,
+  getClientInfo,
+  getAllClientInfo,
+  saveClient,
+  setClientRelease,
+  isValidClientVersion,
+};

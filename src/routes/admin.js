@@ -113,6 +113,28 @@ router.get('/settings/client-download', (req, res) => {
   res.json(clientDownload.getAllClientInfo());
 });
 
+// Declara que version corresponde al binario ya subido, y las notas que el
+// cliente muestra al ofrecer la actualizacion. Separado de la subida porque
+// son dos decisiones distintas: permite corregir una version mal escrita, o
+// dejar de anunciar una actualizacion, sin volver a subir el binario.
+router.put('/settings/client-release/:platform', (req, res) => {
+  try {
+    const { platform } = req.params;
+    const { version, notes } = req.body || {};
+    const info = clientDownload.setClientRelease(platform, version, notes);
+    notifications.logActivity(
+      req.user.sub,
+      'client_release_declared',
+      'platform_settings',
+      1,
+      `${platform}: ${info.version || '(sin anunciar)'}`,
+    );
+    res.json(info);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 const CLIENT_UPLOAD_LIMITS_MB = {
   windows: Number(process.env.CLIENT_EXE_MAX_MB || 500),
   android: Number(process.env.CLIENT_APK_MAX_MB || 500),
