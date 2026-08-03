@@ -99,3 +99,23 @@ ss -lntup | grep -E '8899|2111[5-9]'
 Abre `https://sehcontrol.sehuacho.com/admin/`, inicia sesion y cambia la
 contrasena inicial. Confirma en Configuracion que la clave publica mostrada
 coincide con la indicada arriba.
+
+### Sesiones del cliente nativo
+
+El panel web conserva una cookie JWT de 12 horas. El cliente nativo Sehcontrol
+recibe una sesión opaca persistente, almacenada localmente en el mismo campo
+`access_token` que ya utiliza el cliente. Por eso no requiere un flujo nuevo de
+inicio de sesión ni cambios de protocolo.
+
+El servidor guarda solamente el hash SHA-256 del token. La sesión:
+
+- vence después de `NATIVE_SESSION_TTL_DAYS` días sin uso;
+- renueva su vencimiento como máximo una vez cada
+  `NATIVE_SESSION_TOUCH_INTERVAL_HOURS` horas;
+- queda vinculada al usuario y, cuando está disponible, al equipo;
+- se revoca al cerrar sesión, cambiar la contraseña o suspender la cuenta.
+
+Los valores predeterminados son 90 días de inactividad y una actualización
+máxima cada 24 horas. Se aceptan entre 1 y 365 días, y entre 1 y 168 horas,
+respectivamente. Los JWT nativos emitidos antes de esta migración continúan
+funcionando únicamente hasta completar sus 12 horas originales.

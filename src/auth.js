@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const nativeSessions = require('./nativeSessions');
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET || JWT_SECRET.length < 16) {
@@ -40,14 +41,29 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// Usado por el protocolo nativo del cliente RustDesk (header "Authorization: Bearer <token>")
-// en lugar de la cookie que usa el panel web.
+// Valida las sesiones persistentes nuevas y, durante la migracion,
+// tambien los JWT nativos antiguos de 12 horas.
+function authenticateBearerToken(token, options = {}) {
+  if (nativeSessions.isNativeSessionToken(token)) {
+    return nativeSessions.authenticateNativeSession(token, options);
+  }
+
+  return jwt.verify(token, JWT_SECRET);
+}
+
+// Usado por el protocolo nativo del cliente RustDesk (header
+// "Authorization: Bearer <token>") en lugar de la cookie del panel web.
 function requireBearerAuth(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'No autenticado' });
+
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    const payload = authenticateBearerToken(token);
+    if (!payload) throw new Error('Sesion no encontrada');
+
+    req.user = payload;
+    req.authToken = token;
     next();
   } catch (_) {
     return res.status(401).json({ error: 'Sesion invalida o expirada' });
@@ -60,5 +76,6 @@ module.exports = {
   issueToken,
   requireAuth,
   requireAdmin,
+  authenticateBearerToken,
   requireBearerAuth,
 };

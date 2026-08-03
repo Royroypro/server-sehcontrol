@@ -5,11 +5,12 @@ const deviceInfo = require('../deviceInfo');
 const deviceClaim = require('../deviceClaim');
 const membershipSync = require('../membershipSync');
 const notifications = require('../notifications');
+const nativeSessions = require('../nativeSessions');
 const { buildReceiptPdf } = require('../receipt');
 const { formatCurrency } = require('../format');
 const { requireAuth, requireAdmin, hashPassword } = require('../auth');
 const rustdeskKey = require('../rustdeskKey');
-const { pushToAll } = require('../ws');
+const { pushToAll, closeUserConnections } = require('../ws');
 const clientDownload = require('../clientDownload');
 const screenCamPolicy = require('../screenCamPolicy');
 const screenCamPreview = require('../screenCamPreview');
@@ -308,20 +309,28 @@ router.put('/users/:id', (req, res) => {
     }
   }
 
+  const newStatus = status || user.status;
   const newHash = password ? hashPassword(password) : user.password_hash;
 
   try {
     db.prepare(`
       update users set email = ?, name = ?, role = ?, status = ?, plan_id = ?, plan_started_at = ?, plan_expires_at = ?, password_hash = ?
       where id = ?
-    `).run(newEmail, name !== undefined ? name : user.name, role || user.role, status || user.status, newPlanId || null, newStartedAt, newExpiresAt, newHash, user.id);
+    `).run(newEmail, name !== undefined ? name : user.name, role || user.role, newStatus, newPlanId || null, newStartedAt, newExpiresAt, newHash, user.id);
   } catch (e) {
     return res.status(400).json({ error: e.message.includes('UNIQUE') ? 'Ya existe un usuario con ese email' : e.message });
   }
 
+  // Una contraseña nueva o la suspensión de la cuenta revoca las sesiones
+  // nativas. Así, reactivar posteriormente la cuenta no restaura tokens viejos.
+  if (password || (user.status !== 'suspended' && newStatus === 'suspended')) {
+    nativeSessions.revokeUserNativeSessions(user.id);
+    closeUserConnections(user.id);
+  }
+
   membershipSync.syncUserDevices(user.id);
   notifications.logActivity(req.user.sub, 'user_updated', 'user', user.id,
-    `email=${user.email}->${newEmail} role=${role || user.role} status=${status || user.status}${renew ? ' (renovado)' : ''}`);
+    `email=${user.email}->${newEmail} role=${role || user.role} status=${newStatus}${renew ? ' (renovado)' : ''}`);
   res.json(db.prepare('select id, email, name, role, status, plan_id, plan_started_at, plan_expires_at from users where id = ?').get(user.id));
 });
 

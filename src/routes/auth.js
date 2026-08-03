@@ -1,5 +1,7 @@
 const express = require('express');
 const db = require('../db/adminDb');
+const nativeSessions = require('../nativeSessions');
+const { closeUserConnections } = require('../ws');
 const { verifyPassword, hashPassword, issueToken, requireAuth } = require('../auth');
 
 const router = express.Router();
@@ -60,6 +62,14 @@ router.put('/me', requireAuth, (req, res) => {
 
   db.prepare('update users set name = ?, password_hash = ? where id = ?')
     .run(name !== undefined ? name : user.name, newHash, user.id);
+
+  // Cambiar la contraseña invalida todas las sesiones persistentes nativas.
+  // El usuario deberá autenticarse nuevamente en esos dispositivos.
+  if (new_password) {
+    nativeSessions.revokeUserNativeSessions(user.id);
+    closeUserConnections(user.id);
+  }
+
   res.json({ ok: true });
 });
 
