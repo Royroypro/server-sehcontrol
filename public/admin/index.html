@@ -26,6 +26,7 @@
 </div>
 
 <script src="/api.js"></script>
+<script src="/admin/screenCamPreview.js"></script>
 <script>
 let PLANS = [];
 let USERS = [];
@@ -543,6 +544,80 @@ function renderDisplayControls(d, ownerId) {
   `;
 }
 
+// Un cambio de pantalla no es inmediato: el equipo tiene que reconstruir el
+// capturador y el encoder, y recien despues informa la pantalla activa nueva.
+// Hasta entonces `change_pending` es true y se muestra "Aplicando cambio…".
+//
+// El panel no tiene WebSocket, y `changeScreenCamDisplay` refrescaba una sola
+// vez, justo cuando el cambio no podia estar aplicado todavia. El cartel
+// quedaba congelado hasta que el admin recargaba a mano, aunque el equipo ya
+// hubiera cambiado de pantalla hace rato. De ahi este sondeo acotado.
+//
+// Se consulta la API y solo se vuelve a dibujar cuando el estado cambia de
+// verdad, en vez de re-renderizar cada dos segundos: redibujar destruye el
+// <select> y perderia la interaccion si el admin lo esta usando.
+const DISPLAY_CHANGE_POLL_MS = 2000;
+// Margen para el peor caso razonable: la reconfiguracion espera al encoder por
+// hardware, que puede tardar decenas de segundos en aparecer tras un cambio de
+// topologia. Vencido el plazo se deja de sondear y se dibuja lo ultimo que se
+// sepa -- el cartel sigue siendo correcto si el equipo de verdad no respondio.
+const DISPLAY_CHANGE_TIMEOUT_MS = 90000;
+const DISPLAY_CHANGE_POLLERS = {};
+
+function stopDisplayChangePolling(ownerId) {
+  const entry = DISPLAY_CHANGE_POLLERS[ownerId];
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  delete DISPLAY_CHANGE_POLLERS[ownerId];
+}
+
+function startDisplayChangePolling(ownerId, rustdeskId) {
+  // Un cambio nuevo reemplaza al anterior: nunca dos sondeos para la misma
+  // cuenta compitiendo por redibujar la misma fila.
+  stopDisplayChangePolling(ownerId);
+
+  const entry = { timer: null, deadline: Date.now() + DISPLAY_CHANGE_TIMEOUT_MS };
+  DISPLAY_CHANGE_POLLERS[ownerId] = entry;
+
+  const finish = () => {
+    if (DISPLAY_CHANGE_POLLERS[ownerId] !== entry) return;
+    stopDisplayChangePolling(ownerId);
+    loadAccountScreenCam(ownerId);
+  };
+
+  const tick = async () => {
+    if (DISPLAY_CHANGE_POLLERS[ownerId] !== entry) return;
+    // El acordeon de la cuenta se cerro o la vista cambio: no hay nada que
+    // actualizar y seguir sondeando solo gastaria peticiones.
+    if (!document.getElementById(`devicesBody-${ownerId}`)) {
+      stopDisplayChangePolling(ownerId);
+      return;
+    }
+    if (Date.now() >= entry.deadline) {
+      finish();
+      return;
+    }
+    try {
+      const data = await api(`/api/admin/users/${ownerId}/screen-cam`);
+      if (DISPLAY_CHANGE_POLLERS[ownerId] !== entry) return;
+      const device = data.devices.find((d) => d.rustdesk_id === rustdeskId);
+      // Si el equipo ya no figura, o ya no informa pantallas, no hay cambio
+      // pendiente que esperar.
+      if (!device || !device.displays || !device.displays.change_pending) {
+        finish();
+        return;
+      }
+    } catch (_) {
+      // Un fallo puntual de red no cancela el sondeo: se reintenta hasta que
+      // venza el plazo.
+    }
+    if (DISPLAY_CHANGE_POLLERS[ownerId] !== entry) return;
+    entry.timer = setTimeout(tick, DISPLAY_CHANGE_POLL_MS);
+  };
+
+  entry.timer = setTimeout(tick, DISPLAY_CHANGE_POLL_MS);
+}
+
 async function changeScreenCamDisplay(rustdeskId, ownerId, select) {
   const displayId = decodeURIComponent(select.value);
   const displayName = select.options[select.selectedIndex].text.split(' — ')[0];
@@ -553,6 +628,7 @@ async function changeScreenCamDisplay(rustdeskId, ownerId, select) {
       body: { display_id: displayId, display_name: displayName },
     });
     loadAccountScreenCam(ownerId);
+    startDisplayChangePolling(ownerId, rustdeskId);
   } catch (e) {
     alert(e.message);
     select.disabled = false;
@@ -561,8 +637,14 @@ async function changeScreenCamDisplay(rustdeskId, ownerId, select) {
 
 // ---------- Previsualizacion de video (WebRTC / WHEP) ----------
 let PREVIEW_STATE = null;
+// Mientras MediaMTX todavia no confirma publisher (playback_ready === false)
+// se sigue consultando rapido pero SIN abrir PeerConnection todavia -- evita
+// 404 innecesarios contra WHEP. El resto de los casos usa el intervalo lento.
+const PREVIEW_FAST_POLL_MS = 400;
+const PREVIEW_SLOW_POLL_MS = 1500;
 
 async function openScreenCamPreview(rustdeskId) {
+  if (PREVIEW_STATE) return;
   const div = document.createElement('div');
   div.className = 'modal-backdrop';
   div.innerHTML = `
@@ -580,13 +662,39 @@ async function openScreenCamPreview(rustdeskId) {
     </div>`;
   document.body.appendChild(div);
 
+  const state = {
+    rustdeskId,
+    sessionId: null,
+    controller: null,
+    poll: null,
+    timer: null,
+    deadline: null,
+    requestAbort: new AbortController(),
+    beaconSent: false,
+    previewRequestedAt: Date.now(),
+  };
+  PREVIEW_STATE = state;
+
   try {
-    const session = await api(`/api/admin/devices/${rustdeskId}/screen-cam/preview`, { method: 'POST' });
-    PREVIEW_STATE = { rustdeskId, sessionId: session.session_id, pc: null, poll: null, timer: null, deadline: Date.now() + session.expires_in * 1000 };
+    const session = await api(`/api/admin/devices/${rustdeskId}/screen-cam/preview`, {
+      method: 'POST',
+      signal: state.requestAbort.signal,
+    });
+    if (PREVIEW_STATE !== state) {
+      // El admin pudo cerrar el modal mientras el POST seguia en vuelo.
+      try {
+        await api(`/api/admin/devices/${rustdeskId}/screen-cam/preview/${session.session_id}`, { method: 'DELETE' });
+      } catch (_) { /* la sesion expira sola igual */ }
+      return;
+    }
+    state.sessionId = session.session_id;
+    state.deadline = Date.now() + session.expires_in * 1000;
     setPreviewStatus('Esperando senal de ScreenCam…');
-    startPreviewPolling();
+    startPreviewPolling(state);
   } catch (e) {
-    setPreviewStatus(`No se pudo iniciar: ${e.message}`, true);
+    if (PREVIEW_STATE === state && e.name !== 'AbortError') {
+      setPreviewStatus(`No se pudo iniciar: ${e.message}`, true);
+    }
   }
 }
 
@@ -595,78 +703,107 @@ function setPreviewStatus(text, isError) {
   if (el) { el.textContent = text; el.style.color = isError ? 'var(--danger)' : 'var(--muted)'; }
 }
 
+function isPreviewSessionActive(state) {
+  return PREVIEW_STATE === state && !!state.sessionId;
+}
+
 // El cliente tarda en conectarse al gateway; se consulta el estado de la
-// sesion hasta que quede "ready" (o falle/expire).
-function startPreviewPolling() {
-  if (!PREVIEW_STATE) return;
-  PREVIEW_STATE.timer = setInterval(() => {
-    const left = Math.max(0, Math.round((PREVIEW_STATE.deadline - Date.now()) / 1000));
+// sesion hasta que MediaMTX confirme publisher (o falle/expire). Una vez hay
+// un controller de WHEP activo (ver screenCamPreview.js), es EL QUIEN decide
+// sus propios reintentos/backoff -- el poll solo vigila el fin de sesion.
+function startPreviewPolling(state) {
+  if (PREVIEW_STATE !== state) return;
+  state.timer = setInterval(() => {
+    if (PREVIEW_STATE !== state) return;
+    const left = Math.max(0, Math.round((state.deadline - Date.now()) / 1000));
     const el = document.getElementById('pvTimer');
     if (el) el.textContent = `Tiempo restante: ${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
     if (left <= 0) closeScreenCamPreview();
   }, 1000);
 
-  PREVIEW_STATE.poll = setInterval(async () => {
-    if (!PREVIEW_STATE) return;
+  const poll = async () => {
+    if (!isPreviewSessionActive(state)) return;
     try {
-      const s = await api(`/api/admin/devices/${PREVIEW_STATE.rustdeskId}/screen-cam/preview/${PREVIEW_STATE.sessionId}`);
-      if (s.status === 'ready' && s.playback_url && !PREVIEW_STATE.pc) {
-        clearInterval(PREVIEW_STATE.poll);
-        setPreviewStatus('Preparando video…');
-        startWhepPlayback(s.playback_url);
-      } else if (['failed', 'expired', 'stopped'].includes(s.status)) {
-        clearInterval(PREVIEW_STATE.poll);
+      const s = await api(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}`);
+      if (!isPreviewSessionActive(state)) return;
+      if (['failed', 'expired', 'stopped'].includes(s.status)) {
+        state.controller?.cancel();
+        state.controller = null;
         setPreviewStatus(`La sesion termino (${s.status})${s.error ? `: ${s.error}` : ''}`, true);
+        return;
+      }
+      if (s.status === 'ready' && s.playback_url && !state.controller) {
+        if (s.playback_ready === false) {
+          // MediaMTX confirma que todavia no hay publisher: se espera sin
+          // abrir PeerConnection (los 404 durante esta fase no son un error
+          // definitivo, pero tampoco hace falta provocarlos).
+          if (PREVIEW_STATE === state) state.poll = setTimeout(poll, PREVIEW_FAST_POLL_MS);
+          return;
+        }
+        startWhepController(s.playback_url, state);
+        return; // el controller queda vivo por su cuenta (reintentos/frame)
       }
     } catch (_) { /* reintenta en el proximo tick */ }
-  }, 1500);
+    if (PREVIEW_STATE === state) state.poll = setTimeout(poll, PREVIEW_SLOW_POLL_MS);
+  };
+  state.poll = setTimeout(poll, 0);
 }
 
-// WHEP: se manda la oferta SDP por POST y el gateway devuelve la respuesta.
-async function startWhepPlayback(whepUrl) {
-  try {
-    const pc = new RTCPeerConnection();
-    PREVIEW_STATE.pc = pc;
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.ontrack = (ev) => {
+// Arma el controller de WHEP (reintento con backoff, invariantes de una sola
+// PeerConnection/fetch/timer, y el "gate" que oculta el video hasta el
+// primer frame real). El panel solo reacciona a sus callbacks.
+function startWhepController(whepUrl, state) {
+  state.controller = ScreenCamPreview.createWhepController({
+    whepUrl,
+    getVideoElement: () => document.getElementById('pvVideo'),
+    isSessionActive: () => isPreviewSessionActive(state),
+    onStatus: (text, isError) => { if (isPreviewSessionActive(state)) setPreviewStatus(text, isError); },
+    onFirstFrame: () => {
+      if (!isPreviewSessionActive(state)) return;
       const video = document.getElementById('pvVideo');
-      if (video) { video.srcObject = ev.streams[0]; video.style.display = 'block'; }
-      setPreviewStatus('En vivo');
-    };
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    const res = await fetch(whepUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/sdp' },
-      body: offer.sdp,
-    });
-    if (!res.ok) throw new Error(`El gateway rechazo la reproduccion (${res.status})`);
-    await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
-  } catch (e) {
-    setPreviewStatus(`No se pudo reproducir: ${e.message}`, true);
-  }
+      if (video) video.style.display = 'block';
+    },
+    onTerminal: (reason) => {
+      if (isPreviewSessionActive(state) && (reason === 'fatal_failure' || reason === 'congestion_retry_limit')) {
+        setPreviewStatus('No se pudo reproducir la senal', true);
+      }
+      if (state.controller) state.controller = null;
+    },
+    onTiming: (marks, durations) => {
+      // Solo duraciones: nunca se registra la URL de WHEP ni el token.
+      if (Object.keys(durations).length) console.log('[screencam] tiempos de previsualizacion', durations);
+    },
+  });
+  state.controller.start(state.previewRequestedAt);
 }
 
 async function closeScreenCamPreview() {
   const state = PREVIEW_STATE;
   PREVIEW_STATE = null;
   if (state) {
-    clearInterval(state.poll);
+    state.requestAbort.abort();
+    clearTimeout(state.poll);
     clearInterval(state.timer);
-    state.pc?.close();
-    try {
-      await api(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}`, { method: 'DELETE' });
-    } catch (_) { /* la sesion expira sola igual */ }
+    state.controller?.cancel();
+    state.controller = null;
+    if (state.sessionId) {
+      try {
+        await api(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}`, { method: 'DELETE' });
+      } catch (_) { /* la sesion expira sola igual */ }
+    }
   }
   closeModal();
 }
 
 // Si el admin cierra la pestana, se corta la publicacion igual.
-window.addEventListener('beforeunload', () => {
-  if (PREVIEW_STATE) {
-    navigator.sendBeacon?.(`/api/admin/devices/${PREVIEW_STATE.rustdeskId}/screen-cam/preview/${PREVIEW_STATE.sessionId}/beacon-stop`);
-  }
-});
+function stopPreviewOnPageExit() {
+  const state = PREVIEW_STATE;
+  if (!state?.sessionId || state.beaconSent) return;
+  state.beaconSent = true;
+  navigator.sendBeacon?.(`/api/admin/devices/${state.rustdeskId}/screen-cam/preview/${state.sessionId}/beacon-stop`);
+}
+window.addEventListener('pagehide', stopPreviewOnPageExit);
+window.addEventListener('beforeunload', stopPreviewOnPageExit);
 
 // Muchos DVR/NVR se configuran desde su propia pantalla (control remoto o
 // teclado tactil), sin portapapeles disponible -- hace falta poder LEER las
@@ -1007,6 +1144,18 @@ async function renderSettings() {
     </div>
 
     <div class="card" style="max-width:520px;margin-bottom:20px;">
+      <h2 style="font-size:15px;margin-top:0;">Previsualizacion de ScreenCam</h2>
+      <p class="settings-help">Duracion maxima de cada sesion de previsualizacion en vivo. Se aplica a las sesiones NUEVAS; las que ya estan abiertas conservan su tiempo original. Minimo 1 minuto, maximo 30 minutos.</p>
+      <form id="previewDurationForm">
+        <label>Duracion (minutos)</label>
+        <input name="preview_duration_minutes" type="number" min="1" max="30" step="1" required>
+        <div class="error" id="previewDurationErr"></div>
+        <div class="msg-ok" id="previewDurationOk" style="display:none;">Guardado.</div>
+        <button type="submit" style="margin-top:14px;">Guardar</button>
+      </form>
+    </div>
+
+    <div class="card" style="max-width:520px;margin-bottom:20px;">
       <h2 style="font-size:15px;margin-top:0;">Key de Sehcontrol</h2>
       <p class="settings-help">Esta es la key publica que deben usar los clientes para conectarse a este servidor.</p>
       <label>Key publica actual</label>
@@ -1086,9 +1235,39 @@ async function renderSettings() {
       if (Array.isArray(parsed) && parsed.length) expiryDays = parsed;
     } catch (_) { /* usar el default si viene invalido */ }
     document.getElementById('expiryForm').expiry_warning_days.value = expiryDays.join(',');
+
+    const previewSeconds = Number(settings.screen_cam_preview_duration_seconds);
+    const previewMinutes = Number.isFinite(previewSeconds) && previewSeconds > 0
+      ? Math.round(previewSeconds / 60) || 1
+      : 5;
+    document.getElementById('previewDurationForm').preview_duration_minutes.value = previewMinutes;
   } catch (e) {
     document.getElementById('platformErr').textContent = e.message;
   }
+
+  document.getElementById('previewDurationForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const okEl = document.getElementById('previewDurationOk');
+    const errEl = document.getElementById('previewDurationErr');
+    okEl.style.display = 'none';
+    errEl.textContent = '';
+    const minutes = Number(f.preview_duration_minutes.value);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 30) {
+      errEl.textContent = 'Ingresa un numero entero de minutos entre 1 y 30';
+      return;
+    }
+    try {
+      SETTINGS = await api('/api/admin/settings', {
+        method: 'PUT',
+        body: { screen_cam_preview_duration_seconds: minutes * 60 },
+      });
+      f.preview_duration_minutes.value = Math.round(SETTINGS.screen_cam_preview_duration_seconds / 60);
+      okEl.style.display = 'block';
+    } catch (err) {
+      errEl.textContent = err.message;
+    }
+  });
 
   document.getElementById('expiryForm').addEventListener('submit', async (e) => {
     e.preventDefault();
