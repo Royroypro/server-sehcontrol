@@ -49,9 +49,28 @@ router.get('/client-version/:platform', (req, res) => {
     // Absoluta: el cliente la usa tal cual, sin componer nombres de archivo.
     // Componerlos fue justamente lo que ato el flujo original al esquema de
     // URLs de GitHub.
-    url: announce ? `${publicOrigin(req)}${info.download_url}` : '',
+    // Termina en el nombre del archivo a proposito: ver la ruta con
+    // :filename mas arriba.
+    url: announce ? `${publicOrigin(req)}${info.download_url}/${info.filename}` : '',
     notes: announce ? (info.notes || '') : '',
   });
+});
+
+// Misma descarga, pero con el nombre del archivo en la URL.
+//
+// El cliente instalado guarda la actualizacion usando el ultimo segmento de la
+// URL como nombre local, y despues se niega a ejecutar nada que no termine en
+// .exe o .msi. Con la URL terminada en "/windows" el archivo quedaba sin
+// extension y la instalacion fallaba sin decir nada. El nombre se valida
+// contra el esperado para que la ruta no acepte cualquier cosa.
+router.get('/client-download/:platform/:filename', (req, res) => {
+  const { platform, filename } = req.params;
+  const config = clientDownload.PLATFORMS[platform];
+  if (!config) return res.status(404).json({ error: 'Plataforma desconocida' });
+  if (filename !== config.filename) {
+    return res.status(404).json({ error: 'Archivo no encontrado' });
+  }
+  return clientDownloadHandler(platform)(req, res);
 });
 
 router.get('/client-download/windows', clientDownloadHandler('windows'));
