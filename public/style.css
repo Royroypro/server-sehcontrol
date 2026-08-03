@@ -1,3 +1,15 @@
+/* Panel de administracion de Sehcontrol.
+ *
+ * Solo presentacion: ningun selector cambia de nombre y no se agrega ni se
+ * quita ninguno, para que el JS que arma el HTML siga funcionando igual.
+ *
+ * El panel se usa desde el telefono para revisar equipos fuera de la oficina y
+ * no tenia una sola media query: la barra lateral fija de 220px se comia media
+ * pantalla, las tablas desbordaban el ancho y el boton de cerrar sesion,
+ * posicionado en absoluto, quedaba encima del contenido. Todo eso se resuelve
+ * al final, en la capa responsive.
+ */
+
 :root {
   --bg: #f4f5f7;
   --panel: #ffffff;
@@ -9,6 +21,13 @@
   --danger: #d64545;
   --success: #1e9e5a;
   --warn: #b8860b;
+  /* Agregadas para que el espaciado y la profundidad sean consistentes en
+   * lugar de un valor distinto en cada regla. */
+  --radius: 10px;
+  --radius-sm: 6px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.16);
+  --hover: rgba(47, 111, 237, 0.07);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -22,6 +41,9 @@
     --danger: #e5686a;
     --success: #3ecb82;
     --warn: #e0b34e;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+    --hover: rgba(76, 141, 255, 0.12);
   }
 }
 * { box-sizing: border-box; }
@@ -30,45 +52,65 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
 }
 .center-screen {
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 20px;
 }
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   padding: 24px;
+  box-shadow: var(--shadow);
 }
-.login-card { width: 340px; }
+.login-card { width: 340px; max-width: 100%; }
 .login-card h1 { font-size: 20px; margin-bottom: 4px; }
 .login-card p { color: var(--muted); font-size: 13px; margin-top: 0; }
 label { display: block; font-size: 13px; margin: 12px 0 4px; color: var(--muted); }
 input, select, textarea {
   width: 100%;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-size: 14px;
+  /* 16px evita que iOS haga zoom al enfocar un campo, que descoloca toda la
+   * pagina y obliga a alejar a mano despues de cada escritura. */
+  font-size: 16px;
   font-family: inherit;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--hover);
 }
 textarea { resize: vertical; min-height: 88px; }
 button {
   cursor: pointer;
   border: none;
-  border-radius: 6px;
-  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  padding: 9px 15px;
   font-size: 14px;
+  font-family: inherit;
+  font-weight: 500;
   background: var(--accent);
   color: var(--accent-text);
+  transition: filter 120ms ease, background 120ms ease, border-color 120ms ease;
 }
+button:hover:not(:disabled) { filter: brightness(1.08); }
+button:active:not(:disabled) { filter: brightness(0.95); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
-button.danger { background: var(--danger); color: white; }
+button.secondary:hover:not(:disabled) { background: var(--hover); border-color: var(--accent); filter: none; }
+button.danger { background: var(--danger); color: #fff; }
 .error { color: var(--danger); font-size: 13px; min-height: 18px; margin-top: 10px; }
 .msg-ok { color: var(--success); font-size: 13px; }
 
@@ -79,8 +121,16 @@ button.danger { background: var(--danger); color: white; }
   border-right: 1px solid var(--border);
   padding: 20px 12px;
   flex-shrink: 0;
+  /* La navegacion acompana el scroll del contenido en pantallas largas. */
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 .sidebar h2 { font-size: 15px; padding: 0 8px; margin-bottom: 20px; }
+.sidebar nav { flex: 1; }
 .sidebar nav button {
   display: block;
   width: 100%;
@@ -88,32 +138,82 @@ button.danger { background: var(--danger); color: white; }
   background: transparent;
   color: var(--text);
   margin-bottom: 4px;
-  padding: 8px;
+  padding: 9px 10px;
+  font-weight: 400;
 }
-.sidebar nav button.active { background: var(--accent); color: var(--accent-text); }
-.sidebar .logout { position: absolute; bottom: 20px; width: 196px; }
-.main { flex: 1; padding: 28px 32px; overflow-x: auto; }
+.sidebar nav button:hover:not(.active) { background: var(--hover); filter: none; }
+.sidebar nav button.active { background: var(--accent); color: var(--accent-text); font-weight: 500; }
+/* Sin position:absolute: en el flex column queda abajo por si solo, y ya no
+ * depende de un ancho fijo que se desalineaba al cambiar la barra. */
+.sidebar .logout { width: 100%; margin-top: auto; }
+/* min-width:0 permite que el area se encoja dentro del flex; sin eso una
+ * tabla ancha estira el contenedor y empuja la barra lateral fuera de la
+ * pantalla. overflow-x se conserva como estaba. */
+.main { flex: 1; padding: 28px 32px; min-width: 0; overflow-x: auto; }
 .main h1 { margin-top: 0; font-size: 22px; }
 
 .stat-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
-.stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; min-width: 140px; }
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  min-width: 140px;
+  flex: 1 1 140px;
+  box-shadow: var(--shadow);
+}
 .stat .num { font-size: 26px; font-weight: 600; }
 .stat .label { font-size: 12px; color: var(--muted); }
 
-table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 8px; overflow: hidden; }
-th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
-th { color: var(--muted); font-weight: 500; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }
+th {
+  color: var(--muted);
+  font-weight: 500;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+tbody tr:hover td { background: var(--hover); }
 tr:last-child td { border-bottom: none; }
 
-.badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; }
+.badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
 .badge.active { background: rgba(30,158,90,0.15); color: var(--success); }
 .badge.suspended { background: rgba(214,69,69,0.15); color: var(--danger); }
 .badge.warn { background: rgba(184,134,11,0.15); color: var(--warn); }
 .badge.admin { background: rgba(47,111,237,0.15); color: var(--accent); }
 
-.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
 
-.account-card { padding: 0; margin-bottom: 12px; }
+.account-card {
+  padding: 0;
+  margin-bottom: 12px;
+  transition: border-color 120ms ease;
+}
+.account-card[open] { border-color: var(--accent); }
 .account-card summary {
   cursor: pointer;
   padding: 14px 20px;
@@ -122,7 +222,10 @@ tr:last-child td { border-bottom: none; }
   justify-content: space-between;
   gap: 12px;
   list-style: none;
+  border-radius: var(--radius);
 }
+.account-card summary:hover { background: var(--hover); }
+.account-card[open] summary { border-radius: var(--radius) var(--radius) 0 0; }
 .account-card summary::-webkit-details-marker { display: none; }
 .account-card summary::before {
   content: '';
@@ -141,12 +244,22 @@ tr:last-child td { border-bottom: none; }
 .account-summary-info .label { font-size: 12px; color: var(--muted); }
 .account-body { padding: 0 20px 20px; border-top: 1px solid var(--border); padding-top: 16px; }
 .modal-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
   display: flex; align-items: center; justify-content: center; z-index: 50;
+  padding: 16px;
+  overflow-y: auto;
 }
-.modal { width: 380px; }
+.modal {
+  width: 380px;
+  max-width: 100%;
+  /* Un formulario largo en una pantalla baja quedaba con los botones fuera de
+   * la vista y sin forma de llegar a ellos. */
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+}
 .modal h2 { margin-top: 0; font-size: 17px; }
-.row-actions button { margin-right: 6px; padding: 4px 8px; font-size: 12px; }
+.row-actions button { margin-right: 6px; margin-bottom: 4px; padding: 5px 10px; font-size: 12px; }
 .empty { color: var(--muted); font-size: 13px; padding: 20px 0; text-align: center; }
 
 .switch {
@@ -155,6 +268,7 @@ tr:last-child td { border-bottom: none; }
   width: 38px;
   height: 22px;
   margin: 0;
+  flex-shrink: 0;
 }
 .switch input { width: 1px; height: 1px; opacity: 0; position: absolute; }
 .switch span {
@@ -191,4 +305,139 @@ tr:last-child td { border-bottom: none; }
   background: rgba(214,69,69,0.08);
   color: var(--text);
   font-size: 12px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+
+/* Tablet: se achica el respiro lateral, que a este ancho es lo que mas
+   espacio util roba. */
+@media (max-width: 1024px) {
+  .sidebar { width: 190px; }
+  .main { padding: 24px 20px; }
+}
+
+/* Telefono: la barra lateral pasa a ser una fila de pestanas arriba. Se
+   mantiene visible -no se esconde tras un boton- porque cambiar de seccion es
+   lo que mas se hace en este panel, y un menu oculto agrega un toque a cada
+   navegacion. */
+@media (max-width: 720px) {
+  .layout { flex-direction: column; }
+  /* Dos filas: titulo y "cerrar sesion" arriba, las pestanas debajo ocupando
+     el ancho completo.
+     En una sola fila la navegacion quedaba con 104px utiles de 790px de
+     pestanas -- siete de las ocho eran inalcanzables sin arrastrar a ciegas,
+     porque el titulo y el boton de salir se comian la fila. En su propia fila
+     pasa a 351px visibles en un telefono de 375px. */
+  .sidebar {
+    width: 100%;
+    height: auto;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 6px;
+    box-shadow: var(--shadow);
+  }
+  .sidebar h2 {
+    margin: 0;
+    padding: 0;
+    font-size: 13px;
+    white-space: nowrap;
+    flex: 1 1 auto;
+  }
+  /* flex-basis 100% es lo que fuerza la segunda fila. */
+  .sidebar nav {
+    flex: 1 0 100%;
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .sidebar nav::-webkit-scrollbar { display: none; }
+  .sidebar nav button {
+    width: auto;
+    margin-bottom: 0;
+    white-space: nowrap;
+    border-radius: 20px;
+    padding: 6px 12px;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+  .sidebar .logout {
+    width: auto;
+    margin-top: 0;
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  .main { padding: 18px 14px; }
+  .main h1 { font-size: 19px; }
+
+  .stat-row { gap: 10px; margin-bottom: 18px; }
+  /* Dos por fila. El descuento es mayor que la mitad del gap a proposito: con
+     el valor exacto (50% - 5px) el par entra justo y el redondeo subpixel
+     hacia que envolvieran a una sola columna. */
+  .stat { padding: 13px 15px; min-width: 0; flex: 1 1 calc(50% - 7px); }
+  .stat .num { font-size: 21px; }
+
+  /* La tabla conserva su ancho natural y se desplaza dentro de si misma, en
+     vez de comprimir las columnas hasta volverlas ilegibles. display:block es
+     lo que le da scroll propio sin necesitar un div envolvente, que obligaria
+     a tocar el JS que arma cada tabla. */
+  table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  th, td { padding: 9px 10px; white-space: nowrap; }
+  /* El encabezado pegajoso pierde sentido cuando quien scrollea es la caja y
+     no la pagina, y ademas se superpone con la barra de pestanas. */
+  th { position: static; }
+
+  .account-card summary { padding: 12px 14px; }
+  .account-body { padding: 14px 14px 16px; }
+  .account-summary-info { gap: 10px; }
+
+  .toolbar { align-items: stretch; }
+  .toolbar button { width: 100%; }
+
+  .modal-backdrop { align-items: flex-end; padding: 0; }
+  /* Anclada abajo: en un telefono es donde llega el pulgar, y evita que el
+     teclado virtual tape los campos al abrirse. */
+  .modal {
+    width: 100%;
+    max-height: 92vh;
+    border-radius: var(--radius) var(--radius) 0 0;
+    padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+  }
+
+  /* Objetivos tactiles: por debajo de ~40px de alto los botones de accion en
+     fila se vuelven dificiles de acertar. */
+  .row-actions button { padding: 8px 12px; font-size: 12px; }
+  button { padding: 10px 16px; }
+}
+
+/* Una sola columna solo en pantallas realmente angostas. El corte va por
+   debajo de 360px a proposito: los telefonos comunes (360, 375, 390) entran
+   con dos tarjetas de ~169px, que alcanzan de sobra para "S/220 PEN" y su
+   etiqueta. Con nueve indicadores, forzar una columna en esos anchos convertia
+   el panel en un scroll largo sin necesidad. */
+@media (max-width: 339px) {
+  .stat { flex: 1 1 100%; }
+}
+
+/* Respeta a quien pidio menos animacion en su sistema. */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
 }
