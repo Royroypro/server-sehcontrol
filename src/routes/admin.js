@@ -152,7 +152,16 @@ for (const platform of Object.keys(CLIENT_UPLOAD_LIMITS_MB)) {
 
   router.put(`/settings/client-download/${platform}`, clientUpload, (req, res) => {
     try {
-      const info = clientDownload.saveClient(platform, req.body);
+      // Content-Length lo fija el cliente HTTP a partir del tamano real del
+      // fichero; compararlo con lo recibido es lo que detecta una subida
+      // cortada a medias. Ausente o ilegible se trata como "no declarado" y
+      // saveClient simplemente no puede hacer esa comprobacion.
+      const declared = Number.parseInt(req.get('content-length'), 10);
+      const info = clientDownload.saveClient(
+        platform,
+        req.body,
+        Number.isFinite(declared) ? declared : undefined,
+      );
       notifications.logActivity(
         req.user.sub,
         'client_app_uploaded',

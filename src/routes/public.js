@@ -13,6 +13,17 @@ function clientDownloadHandler(platform) {
   return (req, res) => {
     const info = clientDownload.getClientInfo(platform);
     if (!info.available) return res.status(404).json({ error: 'El cliente aun no esta disponible' });
+    // El hash viaja en la respuesta de la descarga, no solo en el JSON de
+    // estado, para que quien descargue pueda comprobar la integridad sin una
+    // segunda peticion (y sin que esa segunda peticion pueda contestar sobre
+    // una version distinta de la que acaba de bajar).
+    //
+    // Digest es el encabezado estandar (RFC 3230) y el X- es el que resulta
+    // comodo de leer desde un script. `res.download` ya fija Content-Length a
+    // partir del fichero, asi que una descarga cortada se nota tambien ahi.
+    res.set('Digest', `sha-256=${Buffer.from(info.sha256, 'hex').toString('base64')}`);
+    res.set('X-Checksum-Sha256', info.sha256);
+    res.set('X-Content-Length-Expected', String(info.size_bytes));
     res.download(clientDownload.platformPath(platform), info.filename);
   };
 }
@@ -53,6 +64,13 @@ router.get('/client-version/:platform', (req, res) => {
     // :filename mas arriba.
     url: announce ? `${publicOrigin(req)}${info.download_url}/${info.filename}` : '',
     notes: announce ? (info.notes || '') : '',
+    // Con que verificar la descarga. Van aqui ademas de en los encabezados de
+    // la descarga porque un cliente que ya guardo el archivo puede comprobarlo
+    // antes de ejecutarlo, que es el momento que de verdad importa: un
+    // instalador truncado falla de formas mucho mas confusas que una descarga
+    // que se reintenta.
+    sha256: announce ? info.sha256 : '',
+    size_bytes: announce ? info.size_bytes : 0,
   });
 });
 

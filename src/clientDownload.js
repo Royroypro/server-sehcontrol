@@ -1,4 +1,5 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const path = require('path');
 const db = require('./db/adminDb');
 
@@ -20,6 +21,30 @@ const PLATFORMS = {
 
 function platformPath(platform) {
   return path.join(downloadDir, PLATFORMS[platform].filename);
+}
+
+// Hash del binario publicado, para que quien lo descargue pueda comprobar que
+// llego entero. Calcularlo son ~100 ms sobre 30 MB, y getClientInfo se llama en
+// cada sondeo de actualizacion de cada equipo, asi que se memoriza.
+//
+// La clave es (tamano, mtime) y no la ruta: si alguien reemplaza el fichero a
+// mano por fuera del panel, cualquiera de los dos cambia y el hash se recalcula
+// solo. Un sidecar .sha256 en disco no daria esa garantia -- quedaria obsoleto
+// en silencio, que es peor que no tener hash.
+const hashCache = new Map();
+
+function fileSha256(clientPath, stat) {
+  const key = `${clientPath}|${stat.size}|${stat.mtimeMs}`;
+  const cached = hashCache.get(key);
+  if (cached) return cached;
+  const hash = crypto.createHash('sha256').update(fs.readFileSync(clientPath)).digest('hex');
+  // Solo interesa la entrada vigente de cada plataforma; sin esto el mapa
+  // creceria una entrada por cada version que se haya subido nunca.
+  for (const previous of hashCache.keys()) {
+    if (previous.startsWith(`${clientPath}|`)) hashCache.delete(previous);
+  }
+  hashCache.set(key, hash);
+  return hash;
 }
 
 // Solo digitos y puntos: es lo que el cliente compara numericamente
@@ -59,6 +84,7 @@ function getClientInfo(platform) {
     available: true,
     filename: config.filename,
     size_bytes: stat.size,
+    sha256: fileSha256(clientPath, stat),
     updated_at: stat.mtime.toISOString(),
     download_url: `/api/public/client-download/${platform}`,
     version: release.version,
@@ -89,17 +115,40 @@ function getAllClientInfo() {
   return Object.fromEntries(Object.keys(PLATFORMS).map((platform) => [platform, getClientInfo(platform)]));
 }
 
-function saveClient(platform, buffer) {
+// `expectedBytes` es el Content-Length declarado por quien sube. Comprobarlo es
+// el unico modo de distinguir "el binario entero" de "la parte que llego antes
+// de que se cortara la conexion": los bytes magicos solo miran los dos primeros
+// bytes, asi que un ejecutable truncado los pasa igual de bien que uno completo.
+//
+// Y sin esta comprobacion el truncado seria peor que un fallo ruidoso: la
+// escritura es atomica, de modo que un binario incompleto quedaria publicado
+// limpiamente y los equipos se lo descargarian creyendolo bueno.
+function saveClient(platform, buffer, expectedBytes) {
   const config = PLATFORMS[platform];
   const [b0, b1] = config.magicBytes;
   if (!Buffer.isBuffer(buffer) || buffer.length < 2 || buffer[0] !== b0 || buffer[1] !== b1) {
     throw new Error(config.invalidMessage);
   }
+  if (Number.isInteger(expectedBytes) && expectedBytes > 0 && buffer.length !== expectedBytes) {
+    throw new Error(
+      `La subida quedo incompleta: se declararon ${expectedBytes} bytes y llegaron ${buffer.length}. `
+      + 'No se publico nada; vuelva a intentarlo.',
+    );
+  }
 
   const clientPath = platformPath(platform);
   fs.mkdirSync(downloadDir, { recursive: true });
   const tempPath = `${clientPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, buffer, { mode: 0o644 });
+  // El rename solo ocurre despues de que los datos esten en disco de verdad:
+  // sin el fsync, un corte de corriente entre ambos puede dejar publicado un
+  // fichero de tamano correcto y contenido basura.
+  const handle = fs.openSync(tempPath, 'w', 0o644);
+  try {
+    fs.writeSync(handle, buffer);
+    fs.fsyncSync(handle);
+  } finally {
+    fs.closeSync(handle);
+  }
   fs.renameSync(tempPath, clientPath);
   return getClientInfo(platform);
 }
