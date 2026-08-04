@@ -521,6 +521,23 @@ router.delete('/devices/:rustdeskId/screen-cam/rtsp-credentials', (req, res) => 
 });
 
 // ---------- ScreenCam: seleccion remota de pantalla ----------
+// Puertos RTSP/ONVIF del equipo. Vacio/null quita el override y lo devuelve a
+// 554/80. Ver setDevicePorts: el cambio no surte efecto hasta que el servicio
+// del equipo reinicie, porque el puerto se lee una sola vez al arrancar.
+router.put('/devices/:rustdeskId/screen-cam/ports', (req, res) => {
+  const rustdeskId = req.params.rustdeskId;
+  const device = db.prepare('select * from devices where rustdesk_id = ?').get(rustdeskId);
+  if (!device) return res.status(404).json({ error: 'Equipo no encontrado' });
+  const { rtsp_port: rtspPort, onvif_port: onvifPort } = req.body || {};
+  try {
+    const saved = screenCamPolicy.setDevicePorts(rustdeskId, { rtspPort, onvifPort }, req.user.sub);
+    res.json({ ok: true, ...saved });
+  } catch (err) {
+    if (err.code === 'invalid_port') return res.status(400).json({ error: err.message });
+    throw err;
+  }
+});
+
 router.get('/devices/:rustdeskId/screen-cam/displays', (req, res) => {
   const rustdeskId = String(req.params.rustdeskId);
   const device = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);

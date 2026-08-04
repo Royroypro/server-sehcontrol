@@ -461,6 +461,8 @@ async function loadAccountScreenCam(ownerId) {
       <button class="secondary" ${smallBtn} onclick="toggleDeviceScreenCamInline('${d.rustdesk_id}', ${!d.active}, ${ownerId})">${d.active ? 'Apagar' : 'Encender'}</button>
       ${d.active ? `<button class="secondary" ${smallBtn} onclick="regenerateScreenCamCredentials('${d.rustdesk_id}', ${ownerId})">Regenerar credenciales</button>` : ''}
       ${d.rtsp_user ? `<button class="secondary" ${smallBtn} onclick="clearScreenCamCredentials('${d.rustdesk_id}', ${ownerId})">Quitar auth</button>` : ''}
+      <button class="secondary" ${smallBtn} onclick="editScreenCamPorts('${d.rustdesk_id}', ${ownerId})">Puertos</button>
+      ${renderPortOverrideHint(d)}
       ${d.active ? `<button class="secondary" ${smallBtn} onclick="openScreenCamPreview('${d.rustdesk_id}')">Ver previsualizacion</button>` : ''}
     `;
   });
@@ -508,6 +510,52 @@ async function clearScreenCamCredentials(rustdeskId, ownerId) {
   if (!confirm('¿Quitar la autenticacion RTSP de este equipo? El stream queda abierto en la red local hasta que se generen credenciales nuevas.')) return;
   try {
     await api(`/api/admin/devices/${rustdeskId}/screen-cam/rtsp-credentials`, { method: 'DELETE' });
+    loadAccountScreenCam(ownerId);
+  } catch (e) {
+    alert(e.message);
+  }
+}
+
+// Muestra los puertos solo cuando hay override -- el caso normal es 554/80 y
+// no merece ocupar espacio en la fila. Si el equipo reporta un puerto distinto
+// al ordenado, el cambio esta guardado pero todavia no aplicado: el cliente lee
+// el puerto una unica vez al arrancar su servicio.
+function renderPortOverrideHint(d) {
+  const rtsp = d.rtsp_port_override;
+  const onvif = d.onvif_port_override;
+  if (rtsp == null && onvif == null) return '';
+  const partes = [];
+  if (rtsp != null) partes.push(`RTSP ${rtsp}`);
+  if (onvif != null) partes.push(`ONVIF ${onvif}`);
+  const pendiente = rtsp != null && d.reported_rtsp_port != null && d.reported_rtsp_port !== rtsp;
+  return `<br><span style="font-size:11px;color:var(--muted);">Puertos: ${partes.join(' · ')}</span>`
+    + (pendiente
+      ? ` <span class="badge suspended" title="El equipo sigue sirviendo en el puerto ${d.reported_rtsp_port}. El puerto se lee al arrancar, asi que hace falta reiniciar su servicio.">Reinicio pendiente</span>`
+      : '');
+}
+
+async function editScreenCamPorts(rustdeskId, ownerId) {
+  const actual = SCREEN_CAM_CACHE[rustdeskId] || {};
+  const rtspActual = actual.rtsp_port_override == null ? '' : String(actual.rtsp_port_override);
+  const onvifActual = actual.onvif_port_override == null ? '' : String(actual.onvif_port_override);
+  const rtsp = prompt(
+    'Puerto RTSP para este equipo.\n\n'
+    + 'Vacio = 554, que es lo que un DVR/NVR Dahua o Hikvision asume al darlo de\n'
+    + 'alta por IP. Cambialo solo si ese puerto ya esta ocupado en esa maquina.',
+    rtspActual);
+  if (rtsp === null) return;
+  const onvif = prompt(
+    'Puerto ONVIF para este equipo.\n\n'
+    + 'Vacio = 80. Es el que usa la deteccion automatica de camaras del NVR.',
+    onvifActual);
+  if (onvif === null) return;
+  try {
+    await api(`/api/admin/devices/${rustdeskId}/screen-cam/ports`, {
+      method: 'PUT',
+      body: { rtsp_port: rtsp.trim() || null, onvif_port: onvif.trim() || null },
+    });
+    alert('Puertos guardados.\n\nOjo: el equipo los toma al arrancar su servicio, '
+      + 'asi que hasta que reinicie sigue sirviendo en los anteriores.');
     loadAccountScreenCam(ownerId);
   } catch (e) {
     alert(e.message);

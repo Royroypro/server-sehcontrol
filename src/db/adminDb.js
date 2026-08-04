@@ -307,6 +307,17 @@ db.exec(`
 // el servidor decida el formato de presentacion sin parsear nada del cliente.
 addColumnIfMissing('device_screen_cam_settings', 'local_ip', 'varchar(50)');
 addColumnIfMissing('device_screen_cam_settings', 'rtsp_port', 'integer');
+// Puertos elegidos por el admin, que NO son lo mismo que el rtsp_port de
+// arriba: aquel es el que el equipo *reporta* estar usando (heartbeat), este
+// es el que se le *ordena* usar. Por eso el sufijo _override y por eso son
+// columnas distintas -- compartirlas haria que el primer heartbeat del equipo
+// pisara la decision del administrador.
+//
+// null = sin override: el equipo usa 554/80, que es lo que un Dahua o un
+// Hikvision asumen al darlo de alta por IP. Solo hacen falta cuando esos
+// puertos ya estan ocupados en esa maquina.
+addColumnIfMissing('device_screen_cam_settings', 'rtsp_port_override', 'integer');
+addColumnIfMissing('device_screen_cam_settings', 'onvif_port_override', 'integer');
 // Credenciales RTSP (Digest/Basic) por dispositivo -- el panel las genera y
 // las manda al cliente via client-policy/WS, nunca al reves. Guardadas en
 // texto plano: el cliente necesita el valor real para autenticar (no un

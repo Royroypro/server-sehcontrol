@@ -21,8 +21,21 @@ const MODULE = 'screen_cam';
 const DEFAULT_POLICY = {
   licensed: false, desired_state: 'stopped', mode: 'local', max_streams: 0,
   rtsp_user: null, rtsp_password: null,
+  rtsp_port_override: null, onvif_port_override: null,
   selected_display_id: null, fallback_to_primary: true,
 };
+
+// Un puerto util para un NVR: 1-65535. El 0 se rechaza a proposito -- es
+// "que elija el sistema operativo", y un puerto efimero no le sirve a nadie
+// que tenga que escribir la direccion del equipo en un DVR.
+function normalizePortOverride(value) {
+  if (value == null || value === '') return null;
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw moduleError('invalid_port', 'El puerto debe ser un entero entre 1 y 65535, o vacio para usar el predeterminado');
+  }
+  return port;
+}
 
 function safeParseDisplays(raw) {
   try {
@@ -152,6 +165,15 @@ function resolvePolicy(userId, rustdeskId) {
     // generaron credenciales -- el cliente lo trata como "sin auth".
     rtsp_user: licensed ? (deviceSettings?.rtsp_user || null) : null,
     rtsp_password: licensed ? (deviceSettings?.rtsp_password || null) : null,
+    // Puertos. null = sin override y el equipo usa 554/80. Se mandan siempre
+    // (tambien en null) porque el bloque completo es autoritativo del lado
+    // cliente: un campo ausente no distingue "no opino" de "quitalo", y
+    // mandarlos explicitamente es lo que permite revertir un override.
+    //
+    // Ojo con el nombre: el heartbeat ya usa rtsp_port con otro significado
+    // (el puerto que el equipo reporta). Ver docs/CLIENT_INTEGRATION.md.
+    rtsp_port_override: deviceSettings?.rtsp_port_override ?? null,
+    onvif_port_override: deviceSettings?.onvif_port_override ?? null,
     // Pantalla elegida por el admin. Opcional a proposito: un cliente viejo
     // que no lo entienda sigue capturando la principal, como hasta ahora.
     selected_display_id: deviceSettings?.selected_display_id || null,
@@ -181,6 +203,32 @@ function setSelectedDisplay(rustdeskId, { displayId, displayName, fallbackToPrim
     JSON.stringify({ display_id: displayId, display_name: displayName || null }));
   const owner = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
   if (owner) notifyUser(owner.owner_user_id, rustdeskId);
+}
+
+// Fija (o quita, con null) los puertos que debe usar el equipo. Ambos se
+// escriben siempre: el formulario del panel manda los dos juntos, y vaciar
+// uno tiene que poder revertirlo a su valor por defecto.
+//
+// A diferencia de las credenciales, que el cliente relee cada 2 s, el puerto
+// se lee una sola vez al arrancar su servicio. El cambio queda guardado y
+// viaja en la politica, pero no surte efecto hasta que ese equipo reinicie.
+// El panel lo advierte en el formulario para que no parezca que se perdio.
+function setDevicePorts(rustdeskId, { rtspPort, onvifPort }, actorUserId) {
+  const rtsp = normalizePortOverride(rtspPort);
+  const onvif = normalizePortOverride(onvifPort);
+  db.prepare(`
+    insert into device_screen_cam_settings (rustdesk_id, rtsp_port_override, onvif_port_override, updated_at)
+    values (?, ?, ?, datetime('now'))
+    on conflict(rustdesk_id) do update set
+      rtsp_port_override = excluded.rtsp_port_override,
+      onvif_port_override = excluded.onvif_port_override,
+      updated_at = datetime('now')
+  `).run(rustdeskId, rtsp, onvif);
+  notifications.logActivity(actorUserId, 'screen_cam_ports_updated', 'device', rustdeskId,
+    JSON.stringify({ rtsp_port_override: rtsp, onvif_port_override: onvif }));
+  const owner = db.prepare('select owner_user_id from devices where rustdesk_id = ?').get(rustdeskId);
+  if (owner) notifyUser(owner.owner_user_id, rustdeskId);
+  return { rtsp_port_override: rtsp, onvif_port_override: onvif };
 }
 
 // Estado de pantallas de un equipo, para el panel: lista reportada, cual
@@ -342,7 +390,8 @@ function listDevicesForCustomer(userId) {
     select d.rustdesk_id, d.alias, s.hostname, s.os,
            cs.enabled, cs.desired_state, cs.mode, cs.actual_state, cs.encoder,
            cs.last_error, cs.rtsp_clients, cs.local_ip, cs.rtsp_port, cs.last_report_at,
-           cs.rtsp_user, cs.rtsp_password, cs.reported_auth_enabled, cs.reported_rtsp_user
+           cs.rtsp_user, cs.rtsp_password, cs.reported_auth_enabled, cs.reported_rtsp_user,
+           cs.rtsp_port_override, cs.onvif_port_override
     from devices d
     left join device_sysinfo s on s.rustdesk_id = d.rustdesk_id
     left join device_screen_cam_settings cs on cs.rustdesk_id = d.rustdesk_id
@@ -371,6 +420,13 @@ function listDevicesForCustomer(userId) {
       rtsp_password: r.rtsp_password || null,
       auth_enabled: r.reported_auth_enabled === 1,
       auth_mismatch: authMismatch,
+      // Lo que el admin ORDENO (null = predeterminado 554/80). No confundir
+      // con el puerto de rtsp_url, que es el que el equipo REPORTA estar
+      // usando: mientras no reinicie tras un cambio, los dos difieren, y esa
+      // diferencia es justamente lo que el panel tiene que poder mostrar.
+      rtsp_port_override: r.rtsp_port_override ?? null,
+      onvif_port_override: r.onvif_port_override ?? null,
+      reported_rtsp_port: r.rtsp_port ?? null,
       last_report_at: r.last_report_at || null,
       displays: displayStateFor(r.rustdesk_id),
     };
@@ -487,6 +543,7 @@ module.exports = {
   regenerateRtspCredentials,
   clearRtspCredentials,
   setSelectedDisplay,
+  setDevicePorts,
   displayStateFor,
   permissionsFor,
   assertPermission,
