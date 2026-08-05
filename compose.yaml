@@ -20,7 +20,7 @@ services:
       - ./rustdesk-data:/root
 
   panel:
-    image: sehcontrol-panel:2026.08.04.2-integridad-amd64
+    image: sehcontrol-panel:2026.08.04.4-nombre2-amd64
     container_name: sehcontrol-panel
     user: "0:0"
     command: ["sh", "-c", "npm run seed && exec npm start"]

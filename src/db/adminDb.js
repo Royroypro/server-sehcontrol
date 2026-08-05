@@ -183,6 +183,14 @@ addColumnIfMissing('platform_settings', 'client_version_windows', 'text');
 addColumnIfMissing('platform_settings', 'client_notes_windows', 'text');
 addColumnIfMissing('platform_settings', 'client_version_android', 'text');
 addColumnIfMissing('platform_settings', 'client_notes_android', 'text');
+// Nombre con el que se subio el binario, para servirlo igual. No es
+// cosmetico: el empaquetador portable de Windows decide que hacer segun su
+// PROPIO nombre de archivo (libs/portable/src/main.rs, `click_setup`). Con
+// "...install.exe" instala; con cualquier otro nombre se limita a extraerse
+// en %LOCALAPPDATA% y ejecutarse como portable. Publicarlo renombrado a
+// "sehcontrol.exe" convertia el instalador en un portable sin avisar.
+addColumnIfMissing('platform_settings', 'client_filename_windows', 'text');
+addColumnIfMissing('platform_settings', 'client_filename_android', 'text');
 // Tags de la libreta de direcciones "legacy" (categorias "Cabinas"/"Clientes"
 // que pide el cliente). JSON array de strings, ej. '["Cabinas"]'.
 addColumnIfMissing('devices', 'tags', "text not null default '[]'");

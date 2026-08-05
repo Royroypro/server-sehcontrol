@@ -85,7 +85,12 @@ router.get('/client-download/:platform/:filename', (req, res) => {
   const { platform, filename } = req.params;
   const config = clientDownload.PLATFORMS[platform];
   if (!config) return res.status(404).json({ error: 'Plataforma desconocida' });
-  if (filename !== config.filename) {
+  // Se compara contra el nombre publicado, no contra la constante: desde que
+  // se conserva el nombre de subida, el publicado es el que el cliente pide.
+  // Se sigue aceptando el antiguo para no romper a un cliente que guardo la
+  // URL de antes.
+  const published = clientDownload.getClientInfo(platform).filename;
+  if (filename !== published && filename !== config.filename) {
     return res.status(404).json({ error: 'Archivo no encontrado' });
   }
   return clientDownloadHandler(platform)(req, res);

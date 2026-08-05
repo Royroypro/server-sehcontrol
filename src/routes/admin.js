@@ -157,10 +157,15 @@ for (const platform of Object.keys(CLIENT_UPLOAD_LIMITS_MB)) {
       // cortada a medias. Ausente o ilegible se trata como "no declarado" y
       // saveClient simplemente no puede hacer esa comprobacion.
       const declared = Number.parseInt(req.get('content-length'), 10);
+      // El nombre original del archivo. La subida es un PUT con el binario en
+      // crudo, sin multipart, asi que el nombre no viaja solo: la UI lo manda
+      // en este encabezado. Ver clientDownload.sanitizeFilename para por que
+      // importa conservarlo.
       const info = clientDownload.saveClient(
         platform,
         req.body,
         Number.isFinite(declared) ? declared : undefined,
+        req.get('x-client-filename'),
       );
       notifications.logActivity(
         req.user.sub,

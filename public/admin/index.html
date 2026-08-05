@@ -1509,7 +1509,13 @@ function uploadClientHandler(platform) {
     try {
       const res = await fetch(`/api/admin/settings/client-download/${platform}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/octet-stream' },
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          // El nombre viaja aparte porque el cuerpo es el binario en crudo.
+          // Hay que conservarlo: el empaquetador de Windows decide si instala
+          // o si corre como portable segun su propio nombre de archivo.
+          'X-Client-Filename': file.name,
+        },
         body: file,
       });
       const data = await res.json().catch(() => ({}));
@@ -1522,7 +1528,11 @@ function uploadClientHandler(platform) {
       // El binario ya esta arriba. La version se declara despues y por
       // separado, que es como lo expone el servidor: si esto falla, el archivo
       // publicado sigue siendo valido y solo falta anunciarlo.
-      let aviso = '';
+      // El servidor avisa cuando el nombre subido no se comportara como
+      // instalador. Se muestra como error visible, no como texto de exito:
+      // publicarlo asi deja instalaciones a medias en los equipos, y eso no
+      // debe pasar desapercibido entre los mensajes de "todo bien".
+      let aviso = data.warning ? ` AVISO: ${data.warning}` : '';
       try {
         await api(`/api/admin/settings/client-release/${platform}`, {
           method: 'PUT',

@@ -6,14 +6,27 @@ const db = require('./db/adminDb');
 const dataDir = path.resolve(process.env.ADMIN_DATA_PATH || './data');
 const downloadDir = path.join(dataDir, 'downloads');
 
+// `filename` es como se guarda en disco -- estable, para que la ruta no
+// dependa de lo que se suba. `publishedFilename` es con el que se sirve, y
+// tiene que terminar en "install.exe" en Windows: el empaquetador portable
+// decide si instala o si solo corre como portable mirando su propio nombre
+// (libs/portable/src/main.rs, `click_setup`). Publicarlo como
+// "sehcontrol.exe" convertia el instalador en un portable y dejaba equipos
+// con la instalacion a medias.
+//
+// Es el valor por defecto: si la subida trae el nombre original se usa ese.
+// Que el defecto ya sea seguro es deliberado -- depender de que el navegador
+// mande un encabezado es fragil, y el modo de fallo es demasiado caro.
 const PLATFORMS = {
   windows: {
     filename: 'sehcontrol.exe',
+    publishedFilename: 'sehcontrol-install.exe',
     magicBytes: [0x4d, 0x5a], // "MZ", cabecera de ejecutables PE de Windows
     invalidMessage: 'El archivo no parece ser un ejecutable de Windows valido',
   },
   android: {
     filename: 'sehcontrol.apk',
+    publishedFilename: 'sehcontrol.apk',
     magicBytes: [0x50, 0x4b], // "PK", cabecera de ZIP (los APK son un ZIP)
     invalidMessage: 'El archivo no parece ser un paquete de Android (.apk) valido',
   },
@@ -21,6 +34,46 @@ const PLATFORMS = {
 
 function platformPath(platform) {
   return path.join(downloadDir, PLATFORMS[platform].filename);
+}
+
+// Extensiones que cada plataforma acepta. El cliente instalado se niega a
+// ejecutar una actualizacion cuyo nombre no termine en .exe o .msi, asi que
+// publicar cualquier otra cosa seria publicar algo que nadie puede aplicar.
+const ALLOWED_EXTENSIONS = { windows: ['.exe', '.msi'], android: ['.apk'] };
+
+/// Nombre con el que se publica el binario.
+//
+// Importa mas de lo que parece: el empaquetador portable de Windows mira su
+// propio nombre para decidir si instala o si solo se extrae y corre como
+// portable (libs/portable/src/main.rs). Servirlo renombrado convertia el
+// instalador en un portable, y el equipo terminaba con una instalacion a
+// medias -- sin la carpeta data\, sin la que una app Flutter ni arranca.
+function sanitizeFilename(platform, raw) {
+  if (typeof raw !== 'string') return null;
+  // Solo el nombre: nunca una ruta. path.basename corta cualquier intento de
+  // salirse del directorio de descargas.
+  const name = path.basename(raw.trim());
+  if (!name || name === '.' || name === '..') return null;
+  if (name.length > 150) return null;
+  // Conservador a proposito: lo que genera build.py son nombres como
+  // "sehcontrol-1.4.13-install.exe".
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) return null;
+  const lower = name.toLowerCase();
+  if (!ALLOWED_EXTENSIONS[platform].some((ext) => lower.endsWith(ext))) return null;
+  return name;
+}
+
+function readStoredFilename(platform) {
+  try {
+    const row = db.prepare(
+      `select client_filename_${platform} as filename from platform_settings where id = 1`,
+    ).get();
+    const stored = row && typeof row.filename === 'string' ? row.filename.trim() : '';
+    return sanitizeFilename(platform, stored) || PLATFORMS[platform].publishedFilename;
+  } catch (_) {
+    // Migracion no corrida todavia: se comporta como antes de este cambio.
+    return PLATFORMS[platform].publishedFilename;
+  }
 }
 
 // Hash del binario publicado, para que quien lo descargue pueda comprobar que
@@ -82,7 +135,10 @@ function getClientInfo(platform) {
   const stat = fs.statSync(clientPath);
   return {
     available: true,
-    filename: config.filename,
+    // El nombre con el que se publica, que no tiene por que coincidir con el
+    // del archivo en disco: en disco se guarda siempre igual para que la ruta
+    // sea estable, y este es el que ve el cliente y con el que lo guarda.
+    filename: readStoredFilename(platform),
     size_bytes: stat.size,
     sha256: fileSha256(clientPath, stat),
     updated_at: stat.mtime.toISOString(),
@@ -123,7 +179,7 @@ function getAllClientInfo() {
 // Y sin esta comprobacion el truncado seria peor que un fallo ruidoso: la
 // escritura es atomica, de modo que un binario incompleto quedaria publicado
 // limpiamente y los equipos se lo descargarian creyendolo bueno.
-function saveClient(platform, buffer, expectedBytes) {
+function saveClient(platform, buffer, expectedBytes, originalFilename) {
   const config = PLATFORMS[platform];
   const [b0, b1] = config.magicBytes;
   if (!Buffer.isBuffer(buffer) || buffer.length < 2 || buffer[0] !== b0 || buffer[1] !== b1) {
@@ -150,7 +206,32 @@ function saveClient(platform, buffer, expectedBytes) {
     fs.closeSync(handle);
   }
   fs.renameSync(tempPath, clientPath);
-  return getClientInfo(platform);
+
+  // El nombre se guarda despues del binario: si algo falla aqui, lo publicado
+  // sigue siendo valido y solo conserva el nombre anterior.
+  const published = sanitizeFilename(platform, originalFilename);
+  if (published) {
+    try {
+      db.prepare(
+        `update platform_settings set client_filename_${platform} = ? where id = 1`,
+      ).run(published);
+    } catch (_) {
+      // Migracion no corrida: se sirve con el nombre por defecto, como antes.
+    }
+  }
+
+  const info = getClientInfo(platform);
+  // Se avisa, no se rechaza: un .msi es legitimo y el operador puede tener
+  // motivos para subir otra cosa. Pero un .exe que no termina en install.exe
+  // se comporta como portable y deja la instalacion a medias, y eso no debe
+  // descubrirse en el equipo de un cliente.
+  if (platform === 'windows' && info.filename.toLowerCase().endsWith('.exe')
+      && !info.filename.toLowerCase().endsWith('install.exe')) {
+    info.warning = `El nombre "${info.filename}" no termina en "install.exe". `
+      + 'El empaquetador de Windows solo instala cuando su archivo se llama asi; '
+      + 'con otro nombre se ejecuta como portable y no completa la instalacion.';
+  }
+  return info;
 }
 
 module.exports = {
