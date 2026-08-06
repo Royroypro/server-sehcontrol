@@ -25,26 +25,30 @@ const { verifyPassword, requireBearerAuth } = require('../auth');
 
 const router = express.Router();
 
-// El cliente de RustDesk (pestana Ajustes -> Account) solo muestra dos cosas
-// de la cuenta: "display_name" (texto grande) y "@name" (el email, chico,
-// debajo). No existe ningun campo nativo para "vence en X dias" o "suspendida",
-// asi que se aprovecha display_name como el unico canal disponible para avisar
-// algo ahi dentro sin tocar el cliente. Si todo esta bien se deja vacio y el
-// cliente cae solo al fallback (muestra el email normal, sin aviso).
-function membershipWarning(user) {
-  if (user.status !== 'active') return '⚠ Cuenta suspendida';
-  if (user.plan_expires_at) {
-    const daysLeft = Math.ceil((new Date(user.plan_expires_at) - new Date()) / 86400000);
-    if (daysLeft < 0) return '⚠ Plan vencido';
-    if (daysLeft <= 7) return `⚠ Plan vence en ${daysLeft} dia(s)`;
-  }
-  return '';
-}
-
+// display_name lleva el nombre de la cuenta, y nada mas.
+//
+// Antes cargaba el aviso de membresia ("⚠ Plan vence en N dia(s)"), porque la
+// pestana Ajustes -> Account del cliente solo muestra display_name y el email
+// y no hay campo nativo para avisar ahi. Tenia dos problemas serios:
+//
+// 1. display_name NO se queda en esa pantalla: es el nombre de la cuenta en
+//    toda la app. El aviso aparecia como nombre del usuario en el chat y en
+//    la lista de conexiones entrantes del equipo controlado, donde no pinta
+//    nada y ademas tapa el nombre real.
+//
+// 2. El cliente lo cachea en disco y solo lo reescribe cuando
+//    /api/currentUser responde bien. Un aviso emitido cuando faltaban 4 dias
+//    sobrevivia a la renovacion del plan: el equipo seguia anunciandose como
+//    "Plan vence en 4 dia(s)" con 368 dias por delante, y no se corregia solo.
+//
+// El aviso viaja por /api/membership/status y por el push de WebSocket, que
+// es donde debe estar: el cliente lo pinta en el banner de la pantalla
+// principal (buildMembershipBanner, tanto en escritorio como en movil) y ese
+// canal se refresca cada 15 minutos, asi que no puede quedarse pegado.
 function toUserPayload(user) {
   return {
     name: user.email,
-    display_name: membershipWarning(user),
+    display_name: user.name || '',
     avatar: '',
     email: user.email,
     note: '',
