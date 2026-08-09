@@ -944,6 +944,7 @@ router.get('/activity', (req, res) => {
   const rows = db.prepare(`
     select l.*, u.email as actor_email
     from activity_log l left join users u on u.id = l.actor_user_id
+    where l.created_at >= datetime('now', '-7 days')
     order by l.created_at desc
     limit 300
   `).all();

@@ -1,3 +1,9 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "7"
+
 services:
   hbbr:
     image: sehcontrol-rustdesk-server:1.1.16-membership-amd64
@@ -5,6 +11,7 @@ services:
     command: hbbr
     network_mode: host
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./rustdesk-data:/root
 
@@ -14,18 +21,20 @@ services:
     command: hbbs -r sehcontrol.sehuacho.com:21117
     network_mode: host
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - hbbr
     volumes:
       - ./rustdesk-data:/root
 
   panel:
-    image: sehcontrol-panel:2026.08.06.1-display-name-amd64
+    image: sehcontrol-panel:2026.08.09.2-retention-amd64
     container_name: sehcontrol-panel
     user: "0:0"
     command: ["sh", "-c", "npm run seed && exec npm start"]
     network_mode: host
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - hbbs
     env_file:
@@ -58,6 +67,7 @@ services:
     container_name: sehcontrol-mediamtx
     network_mode: host
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - panel
     volumes:

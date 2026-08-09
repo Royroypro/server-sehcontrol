@@ -6,11 +6,23 @@
 <title>Panel Admin - Sehcontrol</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
+<body class="admin-page">
 <div class="layout">
-  <div class="sidebar">
-    <h2>Sehcontrol Admin</h2>
-    <nav>
+  <header class="mobile-header">
+    <button class="menu-toggle" type="button" aria-label="Abrir menu" aria-controls="admin-sidebar" aria-expanded="false" onclick="setSidebarOpen(true)">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="mobile-brand"><span class="brand-mark">S</span><strong>Sehcontrol</strong></div>
+    <span class="mobile-context">Admin</span>
+  </header>
+  <aside class="sidebar" id="admin-sidebar">
+    <div class="brand">
+      <span class="brand-mark">S</span>
+      <span><strong>Sehcontrol</strong><small>Panel administrativo</small></span>
+      <button class="sidebar-close" type="button" aria-label="Cerrar menu" onclick="setSidebarOpen(false)">×</button>
+    </div>
+    <div class="nav-label">Gestion</div>
+    <nav aria-label="Navegacion principal">
       <button class="active" data-tab="dashboard">Dashboard</button>
       <button data-tab="users">Usuarios</button>
       <button data-tab="plans">Membresias</button>
@@ -20,8 +32,12 @@
       <button data-tab="activity">Actividad</button>
       <button data-tab="settings">Configuracion</button>
     </nav>
-    <button class="secondary logout" onclick="logout()">Cerrar sesion</button>
-  </div>
+    <div class="sidebar-footer">
+      <span class="session-dot"></span><span>Sesion de administrador</span>
+      <button class="secondary logout" onclick="logout()">Cerrar sesion</button>
+    </div>
+  </aside>
+  <button class="sidebar-backdrop" type="button" aria-label="Cerrar menu" onclick="setSidebarOpen(false)"></button>
   <div class="main" id="main"></div>
 </div>
 
@@ -53,8 +69,18 @@ document.querySelectorAll('.sidebar nav button').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.sidebar nav button').forEach((b) => b.classList.remove('active'));
     btn.classList.add('active');
+    setSidebarOpen(false);
     tabs[btn.dataset.tab]();
   });
+});
+
+function setSidebarOpen(open) {
+  document.body.classList.toggle('sidebar-open', open);
+  document.querySelector('.menu-toggle')?.setAttribute('aria-expanded', String(open));
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') setSidebarOpen(false);
 });
 
 function closeModal() {
@@ -64,24 +90,29 @@ function closeModal() {
 // ---------- Dashboard ----------
 async function renderDashboard() {
   const main = document.getElementById('main');
-  main.innerHTML = '<h1>Dashboard</h1><div id="stats" class="stat-row"></div><div id="renewals"></div>';
+  main.innerHTML = `
+    <div class="page-heading">
+      <div><span class="eyebrow">Vista general</span><h1>Dashboard</h1><p>Resumen del estado de tu plataforma.</p></div>
+      <span class="live-pill"><i></i> Sistema activo</span>
+    </div>
+    <div id="stats" class="stat-row"></div><div id="renewals"></div>`;
   try {
     const s = await api('/api/admin/stats');
     document.getElementById('stats').innerHTML = `
-      <div class="stat"><div class="num">${s.revenueMonthFormatted}</div><div class="label">Ingresos este mes</div></div>
-      <div class="stat"><div class="num">${s.revenueTotalFormatted}</div><div class="label">Ingresos totales</div></div>
-      <div class="stat"><div class="num">${s.users}</div><div class="label">Usuarios totales</div></div>
-      <div class="stat"><div class="num">${s.clients}</div><div class="label">Clientes</div></div>
-      <div class="stat"><div class="num">${s.devices}</div><div class="label">Equipos asignados</div></div>
-      <div class="stat"><div class="num">${s.expiringSoon}</div><div class="label">Planes por vencer (7 dias)</div></div>
-      <div class="stat"><div class="num">${s.expired}</div><div class="label">Planes vencidos</div></div>
-      <div class="stat"><div class="num">${s.recentAlerts}</div><div class="label">Alertas (7 dias)</div></div>
+      <div class="stat stat-revenue"><div class="stat-icon">$</div><div><div class="label">Ingresos este mes</div><div class="num">${s.revenueMonthFormatted}</div></div></div>
+      <div class="stat stat-revenue"><div class="stat-icon">↗</div><div><div class="label">Ingresos totales</div><div class="num">${s.revenueTotalFormatted}</div></div></div>
+      <div class="stat stat-users"><div class="stat-icon">U</div><div><div class="label">Usuarios totales</div><div class="num">${s.users}</div></div></div>
+      <div class="stat stat-users"><div class="stat-icon">C</div><div><div class="label">Clientes</div><div class="num">${s.clients}</div></div></div>
+      <div class="stat stat-devices"><div class="stat-icon">E</div><div><div class="label">Equipos asignados</div><div class="num">${s.devices}</div></div></div>
+      <div class="stat stat-warning"><div class="stat-icon">!</div><div><div class="label">Por vencer en 7 dias</div><div class="num">${s.expiringSoon}</div></div></div>
+      <div class="stat stat-danger"><div class="stat-icon">×</div><div><div class="label">Planes vencidos</div><div class="num">${s.expired}</div></div></div>
+      <div class="stat stat-warning"><div class="stat-icon">A</div><div><div class="label">Alertas en 7 dias</div><div class="num">${s.recentAlerts}</div></div></div>
       ${!s.hbbsConnected ? '<div class="stat" style="border-color:var(--danger)"><div class="label">No se detecto la base de datos de hbbs (db_v2.sqlite3). El estado en vivo de equipos no esta disponible.</div></div>' : ''}
       ${s.otherCurrencyPaidCount ? `<div class="stat" style="border-color:var(--warn)"><div class="label">${s.otherCurrencyPaidCount} pago(s) pagado(s) en otra moneda (no incluidos arriba) — moneda de la plataforma: ${s.revenueCurrency}</div></div>` : ''}
     `;
     if (s.upcomingRenewals.length) {
       document.getElementById('renewals').innerHTML = `
-        <h1 style="font-size:16px;margin-top:24px;">Vencen en los proximos 7 dias</h1>
+        <div class="section-heading"><div><span class="eyebrow">Seguimiento</span><h2>Proximos vencimientos</h2></div><span class="section-count">${s.upcomingRenewals.length} planes</span></div>
         <table><thead><tr><th>Email</th><th>Plan</th><th>Vence</th></tr></thead><tbody>
           ${s.upcomingRenewals.map((u) => `<tr><td>${u.email}</td><td>${u.plan_name || '-'}</td><td>${fmtDate(u.plan_expires_at)}</td></tr>`).join('')}
         </tbody></table>`;
@@ -451,7 +482,7 @@ async function loadAccountScreenCam(ownerId) {
     cell.innerHTML = `
       ${d.active ? '<span class="badge active">Activo</span>' : '<span class="badge">Inactivo</span>'}
       ${d.auth_mismatch ? '<span class="badge suspended" title="El panel emitio credenciales pero el equipo reporta el stream sin autenticacion">Auth sin aplicar</span>' : ''}
-      ${d.last_error ? `<br><span style="color:var(--danger);font-size:11px;">${d.last_error}</span>` : ''}
+      ${d.last_error ? `<br><span class="sc-error">${d.last_error}</span>` : ''}
       ${d.rtsp_url ? `<br><span style="font-size:11px;color:var(--muted);">${d.rtsp_url}</span>` : ''}
       ${d.rtsp_user ? `
         <br><button type="button" class="secondary" ${smallBtn} onclick="showScreenCamCredentials('${d.rustdesk_id}')">Ver credenciales</button>

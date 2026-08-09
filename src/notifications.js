@@ -8,6 +8,19 @@ const nodemailer = require('nodemailer');
 const db = require('./db/adminDb');
 const ws = require('./ws');
 
+const ACTIVITY_RETENTION_DAYS = 7;
+
+// La bitacora es operativa, no un archivo historico permanente. Este barrido
+// se ejecuta al iniciar el scheduler y luego cada hora junto con los avisos.
+// El indice idx_activity_created mantiene el DELETE acotado aun con mucho uso.
+function cleanupActivityLog(now = Date.now()) {
+  const timestamp = now instanceof Date ? now.getTime() : Number(now);
+  if (!Number.isFinite(timestamp)) throw new TypeError('fecha de limpieza invalida');
+  const cutoff = new Date(timestamp - ACTIVITY_RETENTION_DAYS * 86400000)
+    .toISOString().slice(0, 19).replace('T', ' ');
+  return db.prepare('delete from activity_log where created_at < ?').run(cutoff).changes;
+}
+
 let transporter = null;
 function getTransporter() {
   if (transporter !== null) return transporter;
@@ -100,6 +113,7 @@ function getExpiryThresholds() {
 // si el usuario renueva, plan_expires_at cambia y los avisos se pueden
 // volver a generar en el siguiente ciclo.
 async function generateExpiryAlerts() {
+  cleanupActivityLog();
   const thresholds = getExpiryThresholds();
   const users = db.prepare(`
     select id, email, status, plan_expires_at from users where role = 'client'
@@ -211,4 +225,12 @@ function logActivity(actorUserId, action, targetType, targetId, detail) {
   `).run(actorUserId ?? null, action, targetType ?? null, targetId != null ? String(targetId) : null, detail ?? null);
 }
 
-module.exports = { createAlert, sendEmail, generateExpiryAlerts, startAlertScheduler, logActivity };
+module.exports = {
+  ACTIVITY_RETENTION_DAYS,
+  cleanupActivityLog,
+  createAlert,
+  sendEmail,
+  generateExpiryAlerts,
+  startAlertScheduler,
+  logActivity,
+};

@@ -2,6 +2,14 @@
 .env
 backups
 data
-node_modules
 rustdesk-data
+node_modules
+releases
+*.bak*
+*.tar.gz
+*.apk
+public/client/*.exe
+public/client/*.apk
+test
+docs
 npm-debug.log*
