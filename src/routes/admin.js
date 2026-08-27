@@ -138,10 +138,14 @@ router.put('/settings/client-release/:platform', (req, res) => {
 const CLIENT_UPLOAD_LIMITS_MB = {
   windows: Number(process.env.CLIENT_EXE_MAX_MB || 500),
   android: Number(process.env.CLIENT_APK_MAX_MB || 500),
+  linux: Number(process.env.CLIENT_LINUX_MAX_MB || 500),
 };
 const CLIENT_UPLOAD_TYPES = {
   windows: ['application/octet-stream', 'application/x-msdownload', 'application/vnd.microsoft.portable-executable'],
   android: ['application/octet-stream', 'application/vnd.android.package-archive'],
+  // .deb, .AppImage (ELF) y .tar.gz. El navegador suele mandar octet-stream;
+  // el resto cubre los tipos concretos que algunos clientes ponen.
+  linux: ['application/octet-stream', 'application/x-debian-package', 'application/vnd.debian.binary-package', 'application/gzip', 'application/x-executable'],
 };
 
 for (const platform of Object.keys(CLIENT_UPLOAD_LIMITS_MB)) {

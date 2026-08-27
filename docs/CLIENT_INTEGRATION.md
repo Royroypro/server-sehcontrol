@@ -1153,37 +1153,248 @@ Endpoints (requieren admin):
 POST   /api/admin/devices/{rustdesk_id}/screen-cam/preview
 GET    /api/admin/devices/{rustdesk_id}/screen-cam/preview/{session_id}
 DELETE /api/admin/devices/{rustdesk_id}/screen-cam/preview/{session_id}
+POST   /api/admin/devices/{rustdesk_id}/screen-cam/preview/{session_id}/beacon-stop
 ```
+
+En las dos operaciones de cierre, `{rustdesk_id}` y `{session_id}` deben pertenecer a la
+misma sesión. Una combinación cruzada se trata igual que una sesión inexistente: DELETE
+devuelve 404 y `beacon-stop` mantiene su respuesta 204 sin revelar existencia ni ejecutar
+el cierre. El beacon es best-effort: si el navegador no llega a entregar la petición, la
+sesión seguirá dependiendo de su expiración normal para cerrarse.
+
+El GET administrativo exige igualmente que `{rustdesk_id}` y `{session_id}` correspondan
+a la misma sesión. Una combinación cruzada devuelve el mismo 404 que una sesión inexistente,
+sin revelar si el identificador pertenece a otro dispositivo. La consulta requiere
+autenticación administrativa, es de solo lectura y permite consultar tanto sesiones activas
+como terminales (`stopped`, `failed` o `expired`).
+
+Desde la mejora de reintento WHEP, el GET además incluye `playback_ready` (booleano):
+
+```json
+{
+  "session_id": "pv_8f12ab34c5",
+  "device_id": "485236790",
+  "status": "ready",
+  "expires_in": 296,
+  "playback_url": "https://sehcontrol.sehuacho.com/media/pv_8f12ab34c5/whep?token=...",
+  "playback_ready": true,
+  "error": null
+}
+```
+
+`playback_ready` es un enriquecimiento que el backend calcula consultando a MediaMTX
+(`GET /v3/paths/get/{name}`, solo desde el servidor, nunca desde el navegador) si el path
+YA tiene un publisher confirmado con al menos una pista. Es **solo una optimización**: el
+panel usa `false` para esperar un poco más antes de abrir la primera `RTCPeerConnection` y
+evitar 404 innecesarios contra WHEP, pero el reintento de WHEP (ver `screenCamPreview.js`
+del panel) sigue siendo la red de seguridad real si esta consulta falla, da error o no está
+disponible (se resuelve como "seguir adelante", nunca como bloqueo). Cuando `status` no es
+`ready` o no hay `playback_url` todavía, `playback_ready` siempre es `false` sin necesidad
+de consultar a MediaMTX.
+
+**Duración de la sesión, configurable por el admin**: el límite que antes estaba fijo en
+300 segundos (5 minutos) ahora se lee de `platform_settings.screen_cam_preview_duration_seconds`,
+editable desde el panel (Configuración → "Previsualización de ScreenCam", en minutos) o vía
+`PUT /api/admin/settings` con `screen_cam_preview_duration_seconds` (en segundos, entero,
+entre 60 y 1800). Solo aplica a sesiones creadas DESPUÉS del cambio: `expires_in`/`expires_at`
+de una sesión ya abierta no se alteran. Requiere rol admin (403 para cualquier otro rol); un
+cambio queda auditado en `activity_log` como `screen_cam_preview_duration_updated`.
 
 Al crear la sesión, el servidor les empuja por WebSocket:
 
 ```json
 {
-  "event": "screen_cam.preview.start",
-  "session_id": "pv_8f12ab",
-  "rustdesk_id": "485236790",
-  "publish_url": "srt://sehcontrol.sehuacho.com:8890",
-  "publish_token": "<token temporal>",
-  "stream_name": "pv_8f12ab",
-  "expires_in": 300
+  "type": "screen_cam.preview.start",
+  "data": {
+    "session_id": "pv_8f12ab34c5",
+    "rustdesk_id": "485236790",
+    "publish_url": "srt://sehcontrol.sehuacho.com:8890",
+    "publish_token": "<token temporal>",
+    "stream_name": "pv_8f12ab34c5",
+    "expires_in": 300
+  }
 }
 ```
 
-**Publiquen con `stream_name` como path y `publish_token` como `token` en el query**, por
-ejemplo `srt://sehcontrol.sehuacho.com:8890?streamid=publish:pv_8f12ab?token=<token>`
-(ajusten al formato exacto que use su librería SRT; el gateway valida path + token
-contra nuestro endpoint de autorización).
+Sobre este payload:
 
-Eventos que esperamos de ustedes por WebSocket:
+- **Servidor → cliente usa `type` + `data`**, igual que el resto de los eventos que ya
+  consumen (`membership_status`, `message`, `screen_cam.update`, `server_key_changed`).
+- **Todos los campos de la previsualización van dentro de `data`.** En la raíz solo existen
+  `type` y `data`, nada más.
+- **No existe `event` en la raíz.** Si su parser todavía lo busca acá, no va a encontrar
+  nada: ese nombre quedó reservado para el sentido contrario (ver más abajo).
+- **No existe un campo `stream_id`.** El `streamid` de SRT lo compone el cliente a partir
+  de `stream_name` y `publish_token`, con el formato de la subsección siguiente.
+
+#### Cómo componer el `streamid` de SRT
+
+**Formato definitivo** (tres segmentos separados por `:`):
+
+```
+publish:<stream_name>:token=<publish_token>
+```
+
+Ejemplo concreto:
+
+```
+publish:pv_8f12ab34c5:token=AbCdEf123456
+```
+
+Y la URL conceptual completa:
+
+```
+srt://sehcontrol.sehuacho.com:8890?streamid=publish:pv_8f12ab34c5:token=AbCdEf123456
+```
+
+**Por qué exactamente así.** MediaMTX 1.9.3 interpreta la sintaxis simple del `streamid`
+como `action:pathname[:query]`, dividiendo **por `:` y nunca por `?`**
+(`internal/servers/srt/streamid.go`, función `unmarshal`: `strings.Split(raw, ":")`, con
+`path = parts[1]` y `query = parts[2]` cuando hay tres segmentos).
+
+Con el formato correcto:
+
+```
+publish:pv_8f12ab34c5:token=ABC
+  → action = publish
+  → path   = pv_8f12ab34c5
+  → query  = token=ABC
+```
+
+Poniendo un `?` en lugar del tercer `:`, el token queda **dentro del path** y el query sale
+vacío:
+
+```
+publish:pv_8f12ab34c5?token=ABC
+  → action = publish
+  → path   = pv_8f12ab34c5?token=ABC     ← no coincide con ningún session_id
+  → query  = (vacío)                     ← no hay token que validar
+```
+
+En ese caso `/api/media-auth` no puede recuperar el token y **rechaza siempre con 401**:
+ninguna publicación llega a establecerse. Si venían probando con esa forma, ese es el
+motivo del fallo.
+
+#### Reglas para el cliente
+
+1. Reciben **por separado**, en el evento de inicio: `publish_url`, `stream_name` y
+   `publish_token`.
+2. Componen el `streamid` **localmente**: `publish:<stream_name>:token=<publish_token>`.
+3. **No** reciben ni necesitan un campo `stream_id` ya armado — no lo mandamos a propósito,
+   para que no existan dos fuentes de verdad sobre el formato.
+4. **Validen antes de conectar** que:
+   - `stream_name` no contiene `:`;
+   - `publish_token` no contiene `:`;
+   - `stream_name` cumple `pv_` seguido de 10 caracteres hexadecimales;
+   - `publish_token` usa base64url (`A-Z a-z 0-9 - _`).
+
+   Si algo de eso no se cumple, aborten en vez de conectar: significaría que el contrato
+   cambió y el `streamid` saldría mal formado.
+5. **No registren el `streamid` completo** en logs: contiene el token.
+6. **No persistan** el token ni el `streamid` — valen para una sola sesión y expiran.
+7. **No usen** usuario, contraseña ni passphrase de SRT en esta versión: la autorización es
+   exclusivamente por el token del query.
+
+#### Orden de detención (servidor → cliente)
+
+Cuando el admin cierra la vista, la sesión expira, o el servidor la corta por cualquier
+motivo, les llega:
+
+```json
+{
+  "type": "screen_cam.preview.stop",
+  "data": {
+    "session_id": "pv_8f12ab34c5",
+    "rustdesk_id": "485236790"
+  }
+}
+```
+
+Mismo formato que el `start`: `type` + `data`, sin `event` en la raíz.
+
+La detección de expiraciones combina tres mecanismos complementarios. Al iniciar el servidor,
+el scheduler ejecuta un barrido inmediato y luego aproximadamente cada 30 segundos mediante
+`setTimeout()` recursivo con `unref()`. Además, continúan los barridos oportunistas al crear una
+preview y durante `/api/media-auth`; estos cierran la ventana entre dos barridos periódicos.
+
+Cada barrido confirma primero la expiración en SQLite, sin esperar a MediaMTX: la sesión pasa a
+`expired`, conserva el primer `ended_at` y pierde inmediatamente su `playback_url`, por lo que
+los nuevos handshakes quedan rechazados. La limpieza posterior se procesa en la cola interna;
+el scheduler no espera que esa cola termine antes del siguiente barrido. Allí se intenta
+expulsar el publisher SRT y se envía este Stop al propietario si el dispositivo todavía existe.
+El Stop es best-effort, no una entrega garantizada. El kick sigue siendo necesario cuando
+Flutter está cerrado o no tiene WebSocket.
+
+El TTL total es de 300 segundos. La espera inicial de 120 segundos solo se aplica a `creating`
+y `waiting_client`; `publishing` y `ready` vencen únicamente por el TTL total. Los barridos son
+periódicos u oportunistas, por lo que no prometen precisión exacta al milisegundo.
+
+**Ignoren el stop** (sin cortar nada) si:
+
+- `rustdesk_id` no corresponde al equipo local;
+- `session_id` no corresponde a la sesión que tienen activa;
+- el stop pertenece a una sesión anterior ya cerrada.
+
+Es importante: un stop rezagado de una sesión vieja no debe cortar una previsualización
+nueva que ya esté corriendo.
+
+#### Estados que esperamos de ustedes (cliente → servidor)
+
+Este sentido **conserva `event` en la raíz** — no lo cambiamos:
+
+```json
+{
+  "event": "screen_cam.preview.started",
+  "session_id": "pv_8f12ab34c5",
+  "rustdesk_id": "485236790"
+}
+```
+
+Los cuatro estados posibles:
 
 ```
 screen_cam.preview.connecting | screen_cam.preview.started
 screen_cam.preview.failed     | screen_cam.preview.stopped
 ```
 
-Formato: `{ "event": "screen_cam.preview.failed", "session_id": "pv_8f12ab", "error": "media_server_unreachable" }`
+Los cuatro eventos deben llevar `event`, `session_id` y `rustdesk_id` en la raíz.
+`rustdesk_id` es obligatorio y debe ser el ID local real del equipo, sin normalizarlo,
+truncarlo ni sustituirlo por el de otro equipo de la cuenta. El servidor comprueba que
+la sesión pertenece exactamente a ese dispositivo y que el propietario del dispositivo
+es el usuario autenticado del WebSocket; conocer solo el `session_id` no autoriza una
+actualización.
 
-Y `screen_cam.preview.stop` es la orden nuestra para que dejen de publicar.
+Cuando el estado es `failed`, agreguen el motivo:
+
+```json
+{
+  "event": "screen_cam.preview.failed",
+  "session_id": "pv_8f12ab34c5",
+  "rustdesk_id": "485236790",
+  "error": "media_server_unreachable"
+}
+```
+
+`error` es un código corto (máximo 100 caracteres, usando letras, números, `.`, `_` o
+`-`), no una URL, token, objeto serializado ni mensaje de error completo.
+
+`stopped`, `failed` y `expired` son estados terminales: ningún evento posterior puede
+reactivar la sesión. Un `started` duplicado de una sesión autorizada que ya está
+`publishing` o `ready` se trata de forma idempotente, sin regenerar tokens ni la URL.
+Los eventos retrasados, vencidos, incompletos, de otro dispositivo o de otro propietario
+pueden ignorarse sin respuesta. La ausencia de `screen_cam.preview.state` no demuestra
+si una sesión existe o no existe y el cliente no debe interpretarla como tal.
+
+#### Resumen de los dos sentidos
+
+```
+Servidor → cliente: type + data
+Cliente → servidor: event en la raíz
+```
+
+No son intercambiables: un mensaje del servidor nunca trae `event`, y uno del cliente
+nunca trae `type`. Si su implementación normaliza ambos a la misma forma internamente,
+está bien, pero lo que viaja por el socket respeta esta separación.
 
 ### 15.5 Seguridad de la previsualización
 
@@ -1191,8 +1402,12 @@ Y `screen_cam.preview.stop` es la orden nuestra para que dejen de publicar.
   (solo lo conoce el navegador del admin). Probado: usar uno en lugar del otro da 401.
 - Ambos mueren cuando la sesión se cierra o expira. Probado: publicar con el token de una
   sesión ya cerrada da 401.
-- Una sola sesión por dispositivo (la segunda da 409), máximo 5 minutos, y se cierra sola
-  si el cliente nunca publica.
+- Una sola sesión por dispositivo (la segunda da 409) y máximo 5 minutos desde su creación,
+  sin renovación. `creating` y `waiting_client` disponen de 120 segundos para completar la
+  captura, el encoder y el handshake inicial; `publishing` y `ready` solo vencen por el TTL
+  total de 300 segundos y pueden reconectar mientras ese TTL siga vigente.
+- La detección combina el scheduler periódico del servidor con barridos oportunistas al crear
+  sesiones o autorizar handshakes.
 - El path del stream es el `session_id`, así que un token filtrado no sirve para mirar
   otro equipo.
 - Las credenciales RTSP **nunca** se exponen al navegador.

@@ -7,3 +7,11 @@ backups/
 dist/
 *.tar.gz
 public/client/sehcontrol.exe
+# Binarios de cliente publicados (se sirven desde public/client via mount, no
+# pertenecen al repo -- mismo criterio que sehcontrol.exe de arriba).
+public/client/sehcontrol.apk
+public/client/sehcontrol-linux
+public/client/*.deb
+public/client/*.AppImage
+# Artefactos de release (imagenes/tarballs), pesados.
+releases/

@@ -98,6 +98,7 @@ router.get('/client-download/:platform/:filename', (req, res) => {
 
 router.get('/client-download/windows', clientDownloadHandler('windows'));
 router.get('/client-download/android', clientDownloadHandler('android'));
+router.get('/client-download/linux', clientDownloadHandler('linux'));
 // Alias retrocompatible con el enlace original, de antes de soportar Android.
 router.get('/client-download', clientDownloadHandler('windows'));
 

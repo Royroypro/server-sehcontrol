@@ -1,46 +1,11 @@
 <!doctype html>
-<html lang="es-PE">
+<html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Sehcontrol | Acceso remoto y gestión de equipos</title>
-  <meta name="description" content="Sehcontrol es un sistema de control remoto para PC que permite conectar, gestionar y dar soporte a equipos autorizados desde una sola cuenta.">
-  <link rel="canonical" href="https://sehcontrol.sehuacho.com/">
-  <meta property="og:type" content="website">
-  <meta property="og:locale" content="es_PE">
-  <meta property="og:site_name" content="Sehcontrol">
-  <meta property="og:title" content="Sehcontrol | Acceso remoto y gestión de equipos">
-  <meta property="og:description" content="Sistema de control remoto para PC para conectar y gestionar equipos autorizados.">
-  <meta property="og:url" content="https://sehcontrol.sehuacho.com/">
-  <meta name="twitter:card" content="summary">
+  <title>Sehcontrol | Acceso remoto administrado</title>
+  <meta name="description" content="Plataforma Sehcontrol para acceso remoto seguro y administracion de equipos.">
   <link rel="stylesheet" href="/site.css">
-  <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@graph": [
-        {
-          "@type": "Organization",
-          "name": "Sehcontrol",
-          "url": "https://sehcontrol.sehuacho.com/",
-          "description": "Servicio de acceso remoto administrado y gestión de equipos autorizados."
-        },
-        {
-          "@type": "WebSite",
-          "name": "Sehcontrol",
-          "url": "https://sehcontrol.sehuacho.com/",
-          "inLanguage": "es-PE"
-        },
-        {
-          "@type": "SoftwareApplication",
-          "name": "Sehcontrol",
-          "applicationCategory": "BusinessApplication",
-          "operatingSystem": "Windows, Android, Linux",
-          "url": "https://sehcontrol.sehuacho.com/",
-          "description": "Plataforma de acceso remoto administrado para equipos autorizados."
-        }
-      ]
-    }
-  </script>
 </head>
 <body class="home">
   <header class="site-header">
@@ -58,13 +23,11 @@
         <div class="hero-copy">
           <p class="eyebrow">ACCESO REMOTO ADMINISTRADO</p>
           <h1>Sehcontrol</h1>
-          <p class="lead">Sistema de control remoto para PC para acceder, conectar y gestionar tus equipos autorizados desde una sola cuenta.</p>
+          <p class="lead">Tus equipos disponibles cuando los necesitas, con acceso centralizado y una membresia que puedes consultar en todo momento.</p>
           <div class="actions">
             <a class="button" href="/login.html">Entrar a mi cuenta</a>
             <a class="button outline download-client" data-platform="windows" href="/api/public/client-download/windows" hidden>Descargar para Windows</a>
             <a class="button outline download-client" data-platform="android" href="/api/public/client-download/android" hidden>Descargar para Android</a>
-            <a class="button outline download-client" data-platform="linux" href="/api/public/client-download/linux" hidden>Descargar para Linux</a>
-            <a class="button whatsapp-link" href="#" target="_blank" rel="noopener" hidden>Contactar por WhatsApp</a>
           </div>
           <p class="account-note">El acceso es exclusivo para clientes con una cuenta activa.</p>
         </div>
@@ -85,8 +48,8 @@
     <section class="workflow-section">
       <div class="workflow-heading">
         <p class="eyebrow">COMO FUNCIONA</p>
-        <h2>Control remoto para PC sin vueltas</h2>
-        <p>Sehcontrol reúne el cliente de escritorio, la cuenta y la administración de equipos en un sistema de control remoto para PC sencillo.</p>
+        <h2>Acceso remoto sin vueltas</h2>
+        <p>Sehcontrol reune el cliente de escritorio, la cuenta y la administracion de equipos en un recorrido sencillo.</p>
       </div>
       <ol class="workflow-list">
         <li><span>01</span><div><h3>Activa tu cuenta</h3><p>Elige una membresia y coordina la activacion directamente con nuestro equipo.</p></div></li>

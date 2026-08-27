@@ -1,0 +1,71 @@
+# Gateway multimedia para la previsualizacion de ScreenCam.
+#
+# Rol: recibe la publicacion SALIENTE del cliente (SRT) y la reentrega al
+# navegador del admin por WebRTC/WHEP. No graba nada y no guarda archivos.
+# El panel decide quien puede publicar y quien puede leer via authHTTPAddress.
+#
+# Ver docs/CLIENT_INTEGRATION.md seccion 15.
+
+logLevel: info
+
+# ---------- API de control (solo interna) ----------
+# Habilitada unicamente para que el backend pueda consultar y cerrar
+# conexiones SRT cuando una previsualizacion termina o queda expirada en
+# SQLite. La limpieza de expiraciones se encola sin bloquear al consumidor.
+#
+# DEBE permanecer vinculada a 127.0.0.1: MediaMTX no trae autenticacion
+# propia para esta API, asi que cualquiera que la alcance puede listar y
+# expulsar conexiones. Cambiarla a ":9997" o "0.0.0.0:9997" la expondria
+# a Internet sin ninguna credencial de por medio -- y con network_mode:
+# host, "expuesta" significa exactamente eso.
+#
+# El puerto 9997 NO debe abrirse en el firewall, ni publicarse en Docker,
+# ni proxearse desde Nginx.
+api: yes
+apiAddress: 127.0.0.1:9997
+
+# ---------- Autorizacion delegada al panel ----------
+# MediaMTX consulta este endpoint antes de aceptar publicar/leer. El panel
+# valida que el path sea una sesion viva y que el token corresponda.
+authMethod: http
+authHTTPAddress: http://127.0.0.1:8899/api/media-auth
+# La API de control no envia credenciales de stream al callback HTTP. Se
+# excluye solo la accion "api"; la API sigue aislada en 127.0.0.1:9997.
+# Publicar y leer medios continúan pasando obligatoriamente por media-auth.
+authHTTPExclude:
+  - action: api
+
+# ---------- Entrada: publicacion del cliente ----------
+# SRT elegido para la primera version: una sola conexion saliente UDP desde
+# el cliente, atraviesa NAT sin configuracion, y es lo mas simple de integrar
+# del lado Rust.
+srt: yes
+srtAddress: :8890
+
+# RTMP/RTSP/HLS de entrada no se usan: el cliente publica solo por SRT.
+rtmp: no
+rtsp: no
+hls: no
+
+# ---------- Salida: WebRTC hacia el navegador ----------
+# 8889 queda solo en localhost: nginx lo publica bajo HTTPS en /media/, para
+# que el navegador no mezcle contenido inseguro con el panel (que es https).
+webrtc: yes
+webrtcAddress: 127.0.0.1:8889
+webrtcLocalUDPAddress: :8189
+webrtcIPsFromInterfaces: yes
+# Sin TURN: la publicacion la inicia el cliente y la lectura la hace el
+# navegador del admin; si algun admin quedara detras de un NAT muy cerrado,
+# habria que agregar un TURN aca.
+webrtcICEServers2: []
+
+# ---------- Sin grabacion, sin archivos permanentes ----------
+pathDefaults:
+  record: no
+  # Si nadie esta leyendo, no se mantiene el stream vivo.
+  sourceOnDemand: no
+
+# Los paths se crean solos con el nombre de la sesion (pv_xxxx); no hay
+# paths fijos declarados a proposito.
+paths:
+  all_others:

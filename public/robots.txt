@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://sehcontrol.sehuacho.com/sitemap.xml

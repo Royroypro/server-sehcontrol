@@ -30,6 +30,21 @@ const PLATFORMS = {
     magicBytes: [0x50, 0x4b], // "PK", cabecera de ZIP (los APK son un ZIP)
     invalidMessage: 'El archivo no parece ser un paquete de Android (.apk) valido',
   },
+  linux: {
+    // Nombre estable en disco, solo interno: el formato real (.deb/.AppImage/
+    // .tar.gz) lo lleva el nombre publicado, no la ruta de almacenamiento.
+    filename: 'sehcontrol-linux',
+    publishedFilename: 'sehcontrol.deb',
+    // Linux admite tres formatos, cada uno con su firma. Se valida contra
+    // cualquiera de ellas (ver saveClient). "!<" = archivo ar de .deb;
+    // 0x7F 'E' = ELF, que es lo que es un AppImage; 1F 8B = gzip de .tar.gz.
+    magicSignatures: [
+      [0x21, 0x3c], // "!<"  -> .deb (archivo ar)
+      [0x7f, 0x45], // 0x7F 'E' -> ELF (AppImage)
+      [0x1f, 0x8b], // gzip -> .tar.gz / .tgz
+    ],
+    invalidMessage: 'El archivo no parece un binario Linux valido (.deb, .AppImage o .tar.gz)',
+  },
 };
 
 function platformPath(platform) {
@@ -39,7 +54,11 @@ function platformPath(platform) {
 // Extensiones que cada plataforma acepta. El cliente instalado se niega a
 // ejecutar una actualizacion cuyo nombre no termine en .exe o .msi, asi que
 // publicar cualquier otra cosa seria publicar algo que nadie puede aplicar.
-const ALLOWED_EXTENSIONS = { windows: ['.exe', '.msi'], android: ['.apk'] };
+const ALLOWED_EXTENSIONS = {
+  windows: ['.exe', '.msi'],
+  android: ['.apk'],
+  linux: ['.deb', '.appimage', '.tar.gz', '.tgz'],
+};
 
 /// Nombre con el que se publica el binario.
 //
@@ -181,8 +200,13 @@ function getAllClientInfo() {
 // limpiamente y los equipos se lo descargarian creyendolo bueno.
 function saveClient(platform, buffer, expectedBytes, originalFilename) {
   const config = PLATFORMS[platform];
-  const [b0, b1] = config.magicBytes;
-  if (!Buffer.isBuffer(buffer) || buffer.length < 2 || buffer[0] !== b0 || buffer[1] !== b1) {
+  // Una plataforma declara `magicBytes` (un unico par) o `magicSignatures` (una
+  // lista de pares, para plataformas con varios formatos como Linux). Se acepta
+  // si el binario empieza por cualquiera de las firmas admitidas.
+  const signatures = config.magicSignatures || [config.magicBytes];
+  const matchesSignature = Buffer.isBuffer(buffer) && buffer.length >= 2
+    && signatures.some(([b0, b1]) => buffer[0] === b0 && buffer[1] === b1);
+  if (!matchesSignature) {
     throw new Error(config.invalidMessage);
   }
   if (Number.isInteger(expectedBytes) && expectedBytes > 0 && buffer.length !== expectedBytes) {
